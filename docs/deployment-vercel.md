@@ -108,15 +108,23 @@ Copy the contents of `api/` into its own Git repository, including `.github/`. C
 
 How the entry works:
 
-- `api/server.js` is the Vercel entry. It imports `dist/serverless.js`
-  lazily from inside the handler, so a bundle that fails to load is logged and
-  answered with the usual `503 PROVIDER_UNAVAILABLE` JSON instead of the
-  platform's anonymous `500 FUNCTION_INVOCATION_FAILED`.
-- `api/tsup.config.ts` builds `src/app.ts` → `dist/serverless.js` as a
+- `api/server.js` is the Vercel entry. Vercel's Express preset only detects
+  files that import `express` directly at `app.*`, `index.*` or `server.*`
+  (repo root or `src/`), and it does **not** bundle npm dependencies for them.
+  `server.js` imports express and loads `dist/serverless.js` lazily from inside
+  a handler, so a bundle that fails to load is logged and answered with the
+  usual `503 PROVIDER_UNAVAILABLE` JSON instead of the platform's anonymous
+  `500 FUNCTION_INVOCATION_FAILED`.
+- `api/tsup.config.ts` builds `src/serverless-app.ts` → `dist/serverless.js` as a
   **single self-contained file**: local source modules and npm dependencies
   are inlined, so the function imports nothing but Node built-ins at runtime.
   Each project now has its own dependencies and lockfile. Bundling is retained
   to preserve the tested serverless entry and its lazy initialization behavior.
+  The source file is deliberately **not** named `app.ts`/`index.ts`/`server.ts`:
+  when it was `src/app.ts`, the preset compiled that TypeScript source instead
+  of `server.js`, left dependencies in `node_modules`, and crashed with
+  `ERR_REQUIRE_ESM` once `sanitize-html` (CommonJS) required the ESM-only
+  `htmlparser2`.
 - `vercel.json` declares `includeFiles: "dist/serverless.js*"` so the built
   bundle (and its source map) is always shipped with `server.js`.
 - `dist/` is gitignored, so the build command is mandatory.
@@ -127,7 +135,7 @@ How the entry works:
   `dev-db`) also stay external; they run with the repo's `node_modules` present.
 
 A missing or invalid environment variable does **not** produce this 500. The
-wrapper in `src/app.ts` catches bootstrap failures and returns
+wrapper in `src/serverless-app.ts` catches bootstrap failures and returns
 `503 PROVIDER_UNAVAILABLE` with a request id. If you see the platform's generic
 500 page instead, the function failed to load, not to configure.
 

@@ -1,12 +1,9 @@
-// Vercel's Express preset loads this file as the function entry. The bundle it
-// imports is built by `pnpm build` (tsup, every dependency inlined), so this
-// module has no runtime imports of its own.
-//
-// The load is deliberately lazy: a static import that throws takes the whole
-// function down before any handler exists, which the platform reports as an
-// opaque 500 FUNCTION_INVOCATION_FAILED with nothing in the logs. Loading
-// inside the handler turns the same failure into a logged error plus the 503
-// JSON the API already uses while it is starting.
+import express from 'express';
+
+// Vercel's Express preset only detects entries that import express directly at
+// app/index/server (root or src/). This file is that entry; the real app lives
+// in the prebundled dist/serverless.js so dependencies never resolve from
+// node_modules at runtime.
 let appPromise;
 
 function loadApp() {
@@ -21,10 +18,14 @@ function loadApp() {
   return appPromise;
 }
 
-export default async function handler(req, res) {
-  let app;
+const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+
+app.use(async (req, res, next) => {
+  let inner;
   try {
-    app = await loadApp();
+    inner = await loadApp();
   } catch (error) {
     console.error('[manage-api] Failed to load the serverless bundle', {
       message: error instanceof Error ? error.message : String(error),
@@ -46,6 +47,7 @@ export default async function handler(req, res) {
     );
     return;
   }
+  inner(req, res, next);
+});
 
-  return app(req, res);
-}
+export default app;

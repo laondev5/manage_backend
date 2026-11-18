@@ -25,7 +25,7 @@ export default defineConfig([
   {
     // Keep the serverless artifact self-contained for predictable deployment.
     ...shared,
-    entry: { serverless: 'src/app.ts' },
+    entry: { serverless: 'src/serverless-app.ts' },
     clean: false,
     noExternal: [/.*/],
     // Bundled CommonJS dependencies still require Node built-ins at runtime.

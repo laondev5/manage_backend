@@ -3,9 +3,11 @@ import express from 'express';
 import { getServerlessApp } from './vercel.js';
 
 /**
- * Vercel's Express preset detects this file and turns the default export into
- * one Fluid function. Requests are forwarded to the real app once its cached
- * Mongo/auth runtime is ready.
+ * Bundled into dist/serverless.js and loaded lazily by the root server.js, which
+ * is the entry Vercel's Express preset detects. The filename deliberately avoids
+ * app/index/server so the preset never compiles this source with node_modules
+ * dependencies left external. Requests are forwarded to the real app once its
+ * cached Mongo/auth runtime is ready.
  */
 const app = express();
 app.disable('x-powered-by');
