@@ -73,3 +73,29 @@ Live Vercel deployment, GitHub Actions execution, Resend delivery, Expo push and
 native device behavior remain unverified. Resend API/webhook credentials and the
 Expo push token still need provider-issued values. Follow the deployment runbook
 for environment settings, database indexes and release smoke checks.
+
+## Admin organization and people management — 2026-11-18
+
+New platform-admin endpoints (all gated by `requireAdmin`, a capability check,
+and `requireRecentAuth` on writes): `DELETE /api/v1/admin/organizations/:id`,
+`POST /api/v1/admin/organizations/:id/members`, `POST /api/v1/admin/admins`, and
+`POST /api/v1/admin/users/:userId/reactivate`. Invitation documents now carry a
+role and the accept workflow uses it; owner-facing invite schemas still expose
+no role, so only an admin can create an owner or another admin, and only an
+admin can create an organization.
+
+Organization deletion is a soft delete: the organization is archived, memberships
+are revoked, assignments ended, sites hidden, pending invitations and grants
+revoked, and users whose only organization it was are marked `DISABLED`.
+Attendance events, shifts and the append-only audit chain are retained. Deletion
+is refused while shifts are `WORKING` or when it holds the last active platform
+administrator. Deactivated accounts are re-gated on every request; an admin can
+reactivate them. Residual risk on a standalone MongoDB deployment: the cascade
+runs in a plain session, so a crash mid-cascade can leave part of the unit
+applied; retrying from the admin console completes it.
+
+Seven new integration tests cover authz denial for owners, role-bearing
+admin/owner invitations, staff-only owner invitations, both deletion guards,
+the cascade and deactivation, blocked access for a disabled account, and
+reactivation. `pnpm lint`, `pnpm typecheck`, `pnpm test` (48), `pnpm
+test:integration` (41), and `pnpm build` with the serverless import check pass.

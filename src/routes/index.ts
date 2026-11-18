@@ -5,6 +5,9 @@ import { z } from 'zod';
 import {
   AppError,
   accessGrantCreateSchema,
+  adminInviteSchema,
+  adminMemberInviteSchema,
+  adminUserReactivateSchema,
   alertReviewSchema,
   assignmentCreateSchema,
   attendanceEventInputSchema,
@@ -21,6 +24,7 @@ import {
   observationInputSchema,
   onboardingUpdateSchema,
   organizationCreateSchema,
+  organizationDeleteSchema,
   organizationUpdateSchema,
   platformSiteUpdateSchema,
   reportCreateSchema,
@@ -1103,6 +1107,108 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
           deps.db,
           authOf(req),
           objectId(param(req, 'organizationId'), 'organizationId'),
+          input,
+          req.requestId,
+        ),
+      );
+    }),
+  );
+
+  adminRouter.delete(
+    '/organizations/:organizationId',
+    asyncHandler(async (req, res) => {
+      requireCapability(req, 'admin.organizations');
+      requireRecentAuth(req);
+      const input = parseBody(organizationDeleteSchema, req.body);
+      res.json(
+        await admin.deleteOrganizationAdmin(
+          deps.db,
+          authOf(req),
+          objectId(param(req, 'organizationId'), 'organizationId'),
+          input,
+          req.requestId,
+        ),
+      );
+    }),
+  );
+
+  adminRouter.post(
+    '/organizations/:organizationId/members',
+    limiter(deps, {
+      windowMs: 60 * 60 * 1000,
+      limit: 30,
+      prefix: 'admin-invite:',
+      key: userOrIp,
+    }),
+    asyncHandler(async (req, res) => {
+      requireCapability(req, 'admin.users');
+      requireRecentAuth(req);
+      const input = parseBody(adminMemberInviteSchema, req.body);
+      res.status(201).json(
+        await admin.inviteOrganizationMemberAdmin(
+          deps.db,
+          authOf(req),
+          objectId(param(req, 'organizationId'), 'organizationId'),
+          {
+            email: input.email,
+            role: input.role,
+            ...(input.siteId ? { siteId: objectId(input.siteId, 'siteId') } : {}),
+            ...(input.note ? { note: input.note } : {}),
+          },
+          {
+            requestId: req.requestId,
+            webUrl: deps.env.trustedWebOrigins[0] ?? 'http://localhost:3000',
+            allowDevToken: !deps.env.isProduction || deps.env.ENABLE_DEV_TOKENS,
+            sendMail: (message) => deps.mailer.send(message),
+            inviterName: authOf(req).user.name,
+          },
+          req.requestId,
+        ),
+      );
+    }),
+  );
+
+  adminRouter.post(
+    '/admins',
+    limiter(deps, {
+      windowMs: 60 * 60 * 1000,
+      limit: 30,
+      prefix: 'admin-create:',
+      key: userOrIp,
+    }),
+    asyncHandler(async (req, res) => {
+      requireCapability(req, 'admin.users');
+      requireRecentAuth(req);
+      const input = parseBody(adminInviteSchema, req.body);
+      res.status(201).json(
+        await admin.invitePlatformAdmin(
+          deps.db,
+          authOf(req),
+          input,
+          {
+            requestId: req.requestId,
+            webUrl: deps.env.trustedWebOrigins[0] ?? 'http://localhost:3000',
+            allowDevToken: !deps.env.isProduction || deps.env.ENABLE_DEV_TOKENS,
+            sendMail: (message) => deps.mailer.send(message),
+            inviterName: authOf(req).user.name,
+          },
+          req.requestId,
+        ),
+      );
+    }),
+  );
+
+  adminRouter.post(
+    '/users/:userId/reactivate',
+    asyncHandler(async (req, res) => {
+      requireCapability(req, 'admin.users');
+      requireRecentAuth(req);
+      const input = parseBody(adminUserReactivateSchema, req.body);
+      res.json(
+        await admin.reactivateUserAdmin(
+          deps.db,
+          authOf(req),
+          param(req, 'userId'),
           input,
           req.requestId,
         ),

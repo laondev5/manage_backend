@@ -895,7 +895,11 @@ export async function acceptInvitationWorkflow(
         existing ??
         (await createMembership(
           db.c,
-          { organizationId: invitation.organizationId, userId: input.userId, role: 'STAFF' },
+          {
+            organizationId: invitation.organizationId,
+            userId: input.userId,
+            role: invitation.role,
+          },
           session,
         ));
       if (site) {
@@ -935,7 +939,7 @@ export async function acceptInvitationWorkflow(
   await appendAudit(db.c, {
     actorId: input.userId,
     actorName: input.name,
-    actorRole: 'STAFF',
+    actorRole: invitation.role,
     action: 'invitation.accepted',
     targetType: 'invitation',
     targetId: invitation._id.toHexString(),

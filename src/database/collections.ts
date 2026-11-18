@@ -24,6 +24,10 @@ export type OrganizationDoc = {
   version: number;
   createdAt: Date;
   updatedAt: Date;
+  /** Soft delete. Historical attendance and audit records keep their organizationId. */
+  deletedAt?: Date | null;
+  deletedBy?: string | null;
+  deletionReason?: string | null;
 };
 
 export type OnboardingDoc = {
@@ -273,7 +277,7 @@ export type InvitationDoc = {
   /** Null for a general-team invitation with no site assignment. */
   siteId: ObjectId | null;
   email: string;
-  role: 'STAFF';
+  role: 'STAFF' | 'SITE_OWNER' | 'PLATFORM_ADMIN';
   tokenHash: string;
   status: 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'REVOKED';
   note: string | null;
@@ -434,6 +438,10 @@ export type AuthUserDoc = {
   id?: string;
   name: string;
   email: string;
+  /** Set by an administrator; disabled accounts cannot authenticate or act. */
+  status?: 'ACTIVE' | 'DISABLED';
+  disabledAt?: Date | null;
+  disabledReason?: string | null;
   emailVerified: boolean;
   twoFactorEnabled?: boolean | null;
   createdAt: Date;

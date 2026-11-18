@@ -1,4 +1,5 @@
 import { ObjectId } from 'mongodb';
+import { randomBytes } from 'node:crypto';
 import {
   AppError,
   conflict,
@@ -14,10 +15,12 @@ import {
   type TimesheetRow,
 } from '../contracts/index.js';
 import { canViewOperationalAttendance } from '../domain/index.js';
+import { teamInvitationEmail } from '../mail.js';
 import {
   adminOverviewCounts,
   appendAudit,
   createAccessGrant,
+  createInvitation,
   createOrganization,
   findSite,
   healthData,
@@ -29,10 +32,12 @@ import {
   listShiftsForSites,
   retryOutbox,
   revokeAccessGrant,
+  sha256,
   updateMembership,
   updateOrganization,
   updatePlatformSite,
   usersByIds,
+  withTransaction,
   type Database,
   type MembershipDoc,
   type OrganizationDoc,
@@ -208,6 +213,7 @@ export async function adminUsers(
       email: row.user.email,
       emailVerified: Boolean(row.user.emailVerified),
       twoFactorEnabled: Boolean(row.user.twoFactorEnabled),
+      accountStatus: row.user.status === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
       memberships: row.memberships.map((entry) => ({
         organizationId: entry.membership.organizationId.toHexString(),
         organizationName: entry.organization?.name ?? 'Unknown organization',
@@ -619,4 +625,339 @@ export function assertOperationalAccess(auth: AuthContext, organizationId: strin
   if (!canViewOperationalAttendance(auth.actor, organizationId)) {
     throw forbidden('Operational attendance access requires an explicit administrative grant.');
   }
+}
+
+/**
+ * Soft-delete an organization and remove all operational access into it.
+ * Attendance events, shifts, and audit history are deliberately retained so
+ * payroll history stays append-only and attributable. Users whose only
+ * organization was this one are disabled at the account level.
+ */
+export async function deleteOrganizationAdmin(
+  db: Database,
+  auth: AuthContext,
+  organizationId: ObjectId,
+  input: { version: number; reason: string },
+  requestId: string,
+) {
+  const org = await db.c.organizations.findOne({ _id: organizationId, deletedAt: null });
+  if (!org) throw notFound('Organization not found.');
+  if (org.version !== input.version) {
+    throw conflict('This organization changed since you loaded it.', 'STALE_VERSION');
+  }
+  if (org.status === 'ARCHIVED') {
+    throw conflict('This organization is already archived.', 'CONFLICT');
+  }
+  const siteIds = (
+    await db.c.sites.find({ organizationId, deletedAt: null }, { projection: { _id: 1 } }).toArray()
+  ).map((site) => site._id);
+  const workingShifts = siteIds.length
+    ? await db.c.shifts.countDocuments({ siteId: { $in: siteIds }, status: 'WORKING' })
+    : 0;
+  if (workingShifts > 0) {
+    throw conflict(
+      'People are still clocked in at this organization. End those shifts before deleting it.',
+      'CONFLICT',
+    );
+  }
+  const activeAdmins = await db.c.memberships.countDocuments({
+    role: 'PLATFORM_ADMIN',
+    status: 'ACTIVE',
+    organizationId: { $ne: organizationId },
+  });
+  const adminsHere = await db.c.memberships.countDocuments({
+    role: 'PLATFORM_ADMIN',
+    status: 'ACTIVE',
+    organizationId,
+  });
+  if (adminsHere > 0 && activeAdmins === 0) {
+    throw conflict(
+      'This organization holds the last active platform administrator. Add another administrator first.',
+      'CONFLICT',
+    );
+  }
+
+  const memberships = await db.c.memberships
+    .find({ organizationId, status: { $ne: 'REVOKED' } })
+    .toArray();
+  const memberIds = [...new Set(memberships.map((membership) => membership.userId))];
+  const otherMemberships = memberIds.length
+    ? await db.c.memberships
+        .find({
+          userId: { $in: memberIds },
+          organizationId: { $ne: organizationId },
+          status: 'ACTIVE',
+        })
+        .toArray()
+    : [];
+  const stillMember = new Set(otherMemberships.map((membership) => membership.userId));
+  const toDeactivate = memberIds.filter((userId) => !stillMember.has(userId));
+  const now = new Date();
+
+  const counts: {
+    membershipsRevoked: number;
+    assignmentsEnded: number;
+    sitesArchived: number;
+    invitationsRevoked: number;
+    grantsRevoked: number;
+  } = {
+    membershipsRevoked: 0,
+    assignmentsEnded: 0,
+    sitesArchived: 0,
+    invitationsRevoked: 0,
+    grantsRevoked: 0,
+  };
+  await withTransaction(db, async (session) => {
+    const locked = await db.c.organizations.updateOne(
+      { _id: organizationId, version: input.version, deletedAt: null },
+      {
+        $set: {
+          status: 'ARCHIVED',
+          deletedAt: now,
+          deletedBy: auth.user.id,
+          deletionReason: input.reason,
+          updatedAt: now,
+        },
+        $inc: { version: 1 },
+      },
+      { session },
+    );
+    if (locked.modifiedCount !== 1) throw conflict('This organization changed while deleting it.', 'STALE_VERSION');
+
+    counts.membershipsRevoked = (
+      await db.c.memberships.updateMany(
+        { organizationId, status: { $ne: 'REVOKED' } },
+        { $set: { status: 'REVOKED', updatedAt: now }, $inc: { version: 1 } },
+        { session },
+      )
+    ).modifiedCount;
+    counts.assignmentsEnded = (
+      await db.c.assignments.updateMany(
+        { organizationId, effectiveTo: null },
+        { $set: { effectiveTo: now, endedBy: auth.user.id } },
+        { session },
+      )
+    ).modifiedCount;
+    counts.sitesArchived = (
+      await db.c.sites.updateMany(
+        { organizationId, deletedAt: null },
+        { $set: { deletedAt: now, status: 'INACTIVE', updatedAt: now }, $inc: { version: 1 } },
+        { session },
+      )
+    ).modifiedCount;
+    counts.invitationsRevoked = (
+      await db.c.invitations.updateMany(
+        { organizationId, status: 'PENDING' },
+        { $set: { status: 'REVOKED' } },
+        { session },
+      )
+    ).modifiedCount;
+    counts.grantsRevoked = (
+      await db.c.accessGrants.updateMany(
+        { organizationId, revokedAt: null },
+        { $set: { revokedAt: now } },
+        { session },
+      )
+    ).modifiedCount;
+    if (toDeactivate.length) {
+      const userIds: Array<string | ObjectId> = [];
+      for (const userId of toDeactivate) {
+        userIds.push(userId);
+        if (ObjectId.isValid(userId)) userIds.push(new ObjectId(userId));
+      }
+      await db.c.users.updateMany(
+        { _id: { $in: userIds }, status: { $ne: 'DISABLED' } },
+        {
+          $set: {
+            status: 'DISABLED',
+            disabledAt: now,
+            disabledReason: `Organization ${org.name} was deleted.`,
+            updatedAt: now,
+          },
+        },
+        { session },
+      );
+    }
+  });
+
+  await appendAudit(db.c, {
+    actorId: auth.user.id,
+    actorName: auth.user.name,
+    actorRole: auth.roles[0] ?? null,
+    action: 'organization.deleted',
+    targetType: 'organization',
+    targetId: organizationId.toHexString(),
+    organizationId,
+    requestId,
+    summary: `Deleted organization ${org.name}. Attendance history was retained.`,
+    meta: { reason: input.reason, ...counts, usersDeactivated: toDeactivate.length },
+  });
+  return {
+    id: organizationId.toHexString(),
+    name: org.name,
+    ...counts,
+    usersDeactivated: toDeactivate.length,
+  };
+}
+
+export async function reactivateUserAdmin(
+  db: Database,
+  auth: AuthContext,
+  userId: string,
+  input: { reason: string },
+  requestId: string,
+) {
+  const userFilter = {
+    $or: [
+      { _id: userId },
+      ...(ObjectId.isValid(userId) ? [{ _id: new ObjectId(userId) }] : []),
+    ],
+  };
+  const user = await db.c.users.findOne({ ...userFilter, status: 'DISABLED' });
+  if (!user) throw notFound('Deactivated account not found.');
+  await db.c.users.updateOne(
+    { ...userFilter, status: 'DISABLED' },
+    { $set: { status: 'ACTIVE', disabledAt: null, disabledReason: null, updatedAt: new Date() } },
+  );
+  await appendAudit(db.c, {
+    actorId: auth.user.id,
+    actorName: auth.user.name,
+    actorRole: auth.roles[0] ?? null,
+    action: 'account.reactivated',
+    targetType: 'user',
+    targetId: userId,
+    requestId,
+    summary: `Reactivated ${user.email}.`,
+    meta: { reason: input.reason },
+  });
+  return { id: userId, email: user.email, status: 'ACTIVE' as const };
+}
+
+type AdminInviteDeps = {
+  requestId: string;
+  webUrl: string;
+  allowDevToken: boolean;
+  sendMail: (message: {
+    to: string;
+    subject: string;
+    text: string;
+    html: string;
+    idempotencyKey: string;
+  }) => Promise<unknown>;
+  inviterName: string;
+};
+
+async function issueAdminInvitation(
+  db: Database,
+  auth: AuthContext,
+  input: {
+    email: string;
+    organizationId: ObjectId;
+    role: 'STAFF' | 'SITE_OWNER' | 'PLATFORM_ADMIN';
+    siteId?: ObjectId | null;
+    note?: string;
+  },
+  context: AdminInviteDeps,
+  requestId: string,
+) {
+  const email = input.email.trim().toLowerCase();
+  const existing = await db.c.users.findOne({ email });
+  if (existing) {
+    throw conflict('An account already exists for this email. Add them to the organization instead.');
+  }
+  const pending = await db.c.invitations.findOne({ email, status: 'PENDING' });
+  if (pending) throw conflict('A pending invitation already exists for this email.');
+  const org = await db.c.organizations.findOne({ _id: input.organizationId, deletedAt: null });
+  if (!org) throw notFound('Organization not found.');
+  if (input.siteId) {
+    const site = await findSite(db.c, input.siteId);
+    if (!site || !site.organizationId.equals(input.organizationId) || site.deletedAt) {
+      throw new AppError(422, 'VALIDATION_ERROR', 'The site must belong to the organization.');
+    }
+  }
+
+  const token = randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const invitation = await createInvitation(db.c, {
+    organizationId: input.organizationId,
+    siteId: input.siteId ?? null,
+    email,
+    role: input.role,
+    tokenHash: sha256(token),
+    note: input.note ?? null,
+    createdBy: auth.user.id,
+    expiresAt,
+  });
+  const url = `${context.webUrl}/invite/${encodeURIComponent(token)}`;
+  const message = teamInvitationEmail(org.name, context.inviterName, url);
+  await context.sendMail({
+    to: email,
+    idempotencyKey: `admin-invitation:${invitation._id.toHexString()}`,
+    ...message,
+  });
+  await appendAudit(db.c, {
+    actorId: auth.user.id,
+    actorName: auth.user.name,
+    actorRole: auth.roles[0] ?? null,
+    action: 'invitation.created',
+    targetType: 'invitation',
+    targetId: invitation._id.toHexString(),
+    organizationId: input.organizationId,
+    siteId: input.siteId ?? null,
+    requestId,
+    summary: `Invited ${email} to ${org.name} as ${input.role}.`,
+    meta: { role: input.role, expiresAt: expiresAt.toISOString() },
+  });
+  return {
+    ok: true as const,
+    email,
+    role: input.role,
+    expiresAt: expiresAt.toISOString(),
+    developmentToken: context.allowDevToken ? token : null,
+  };
+}
+
+/** Admin-only. Owners cannot create owners; only a platform admin can. */
+export async function inviteOrganizationMemberAdmin(
+  db: Database,
+  auth: AuthContext,
+  organizationId: ObjectId,
+  input: {
+    email: string;
+    role: 'SITE_OWNER' | 'STAFF';
+    siteId?: ObjectId;
+    note?: string;
+  },
+  context: AdminInviteDeps,
+  requestId: string,
+) {
+  return issueAdminInvitation(
+    db,
+    auth,
+    { ...input, organizationId },
+    context,
+    requestId,
+  );
+}
+
+/** Admin-only creation of another platform administrator. */
+export async function invitePlatformAdmin(
+  db: Database,
+  auth: AuthContext,
+  input: { email: string; organizationId: string; note?: string },
+  context: AdminInviteDeps,
+  requestId: string,
+) {
+  return issueAdminInvitation(
+    db,
+    auth,
+    {
+      email: input.email,
+      organizationId: new ObjectId(input.organizationId),
+      role: 'PLATFORM_ADMIN',
+      note: input.note,
+    },
+    context,
+    requestId,
+  );
 }

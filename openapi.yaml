@@ -721,6 +721,42 @@ paths:
         - { name: organizationId, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Updated }
+    delete:
+      tags: [Admin]
+      summary: Soft-delete an organization, revoke its access and deactivate users whose only organization it was
+      description: Requires admin.organizations and recent authentication. Refuses when shifts are still WORKING or when it holds the last active platform administrator. Body requires version and reason.
+      parameters:
+        - { name: organizationId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deletion summary }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v1/admin/organizations/{organizationId}/members:
+    post:
+      tags: [Admin]
+      summary: Invite an owner (SITE_OWNER) or staff member to an organization
+      description: Admin-only. Creates an invitation email; the invitee chooses their own password. Owners cannot use this endpoint.
+      parameters:
+        - { name: organizationId, in: path, required: true, schema: { type: string } }
+      responses:
+        '201': { description: Invitation issued }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v1/admin/admins:
+    post:
+      tags: [Admin]
+      summary: Invite another platform administrator
+      description: Admin-only. Creates a role-bearing invitation email; only a platform admin may create another admin.
+      responses:
+        '201': { description: Invitation issued }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v1/admin/users/{userId}/reactivate:
+    post:
+      tags: [Admin]
+      summary: Reactivate a deactivated account
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Account active }
+        '404': { $ref: '#/components/responses/Error' }
   /api/v1/admin/organizations/{organizationId}/timesheets:
     get:
       tags: [Admin]

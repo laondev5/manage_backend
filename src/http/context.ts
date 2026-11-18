@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
+import { ObjectId } from 'mongodb';
 import { ZodError, type ZodType } from 'zod';
 import {
   AppError,
@@ -140,6 +141,19 @@ export function requireAuth(deps: AppDeps) {
     if (!session) throw new AppError(401, 'UNAUTHENTICATED', 'Sign in to continue.');
 
     const context = await getUserContext(deps.db.c, session.user.id);
+    // Disabled accounts are re-gated on every request, not only at sign-in.
+    const userDoc = await deps.db.c.users.findOne(
+      {
+        $or: [
+          { _id: session.user.id },
+          ...(ObjectId.isValid(session.user.id) ? [{ _id: new ObjectId(session.user.id) }] : []),
+        ],
+      },
+      { projection: { status: 1 } },
+    );
+    if (userDoc?.status === 'DISABLED') {
+      throw new AppError(403, 'FORBIDDEN', 'This account has been deactivated. Contact an administrator.');
+    }
     const grants = context.grants.map((grant) => grant.capability);
     const activeMemberships = context.memberships.filter(
       (entry) => entry.membership.status === 'ACTIVE' && entry.organization.status === 'ACTIVE',

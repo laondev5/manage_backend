@@ -338,6 +338,7 @@ export async function createInvitation(
     organizationId: ObjectId;
     siteId: ObjectId | null;
     email: string;
+    role?: 'STAFF' | 'SITE_OWNER' | 'PLATFORM_ADMIN';
     tokenHash: string;
     note: string | null;
     createdBy: string;
@@ -349,7 +350,7 @@ export async function createInvitation(
     organizationId: input.organizationId,
     siteId: input.siteId,
     email: input.email.toLowerCase(),
-    role: 'STAFF',
+    role: input.role ?? 'STAFF',
     tokenHash: input.tokenHash,
     status: 'PENDING',
     note: input.note,
