@@ -1,0 +1,59 @@
+name: Worker tick
+
+# The outbox worker runs inside the API function; this workflow only pokes it.
+# Secrets required (Settings -> Secrets and variables -> Actions):
+#   MANAGE_API_URL          https://<api-project>.vercel.app
+#   WORKER_TRIGGER_SECRET   same value as the API project's variable
+# Optional: VERCEL_PROTECTION_BYPASS, if Deployment Protection blocks the API.
+on:
+  schedule:
+    # GitHub runs schedules in UTC; runs may be delayed or dropped under load.
+    # Keep WORKER_SCHEDULE_SECONDS=300 on the API and monitor overdue heartbeats.
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: worker-tick
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger the tick endpoint
+        env:
+          MANAGE_API_URL: ${{ secrets.MANAGE_API_URL }}
+          WORKER_TRIGGER_SECRET: ${{ secrets.WORKER_TRIGGER_SECRET }}
+          VERCEL_PROTECTION_BYPASS: ${{ secrets.VERCEL_PROTECTION_BYPASS }}
+        run: |
+          set -uo pipefail
+
+          if [ -z "${MANAGE_API_URL:-}" ] || [ -z "${WORKER_TRIGGER_SECRET:-}" ]; then
+            echo "::error::MANAGE_API_URL and WORKER_TRIGGER_SECRET repository secrets must be set."
+            exit 1
+          fi
+          echo "::add-mask::$WORKER_TRIGGER_SECRET"
+
+          url="${MANAGE_API_URL%/}/api/v1/internal/worker/tick?max=90"
+          headers=(-H "authorization: Bearer ${WORKER_TRIGGER_SECRET}" -H "content-type: application/json")
+          if [ -n "${VERCEL_PROTECTION_BYPASS:-}" ]; then
+            echo "::add-mask::$VERCEL_PROTECTION_BYPASS"
+            headers+=(-H "x-vercel-protection-bypass: ${VERCEL_PROTECTION_BYPASS}")
+          fi
+
+          # A cold API function can return 503 on the first call; one retry covers it.
+          for attempt in 1 2; do
+            if body=$(curl -fsS --max-time 55 -X POST "$url" "${headers[@]}"); then
+              echo "$body"
+              exit 0
+            fi
+            echo "::warning::tick attempt ${attempt} failed"
+            sleep 10
+          done
+
+          echo "::error::Worker tick failed after 2 attempts. Check the API deployment logs and the admin health page."
+          exit 1

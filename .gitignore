@@ -1,0 +1,34 @@
+node_modules/
+.pnpm-store/
+dist/
+.next/
+out/
+.expo/
+.vercel/
+coverage/
+*.tsbuildinfo
+
+.env
+.env.*
+!.env.example
+
+.data/
+.mail/
+.push/
+*.log
+.DS_Store
+Thumbs.db
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Local-only seed script (accounts, demo data)
+src/scripts/seed.ts
+src/scripts/users.ts
+
+# Design reference exports kept out of the repo
+ui.zip
+ui/
+.expo-export-check/

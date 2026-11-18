@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "express",
+  "buildCommand": "pnpm typecheck && pnpm build",
+  "functions": {
+    "server.js": {
+      "maxDuration": 60,
+      "includeFiles": "dist/serverless.js*"
+    }
+  },
+  "installCommand": "pnpm install --frozen-lockfile"
+}

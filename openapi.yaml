@@ -1,0 +1,1029 @@
+openapi: 3.1.0
+info:
+  title: Manage API
+  version: 0.1.0
+  description: |
+    Attendance, presence oversight, corrections, and administration for Manage.
+
+    Authentication uses Better Auth sessions. Browser clients receive an HttpOnly
+    session cookie and must also send `X-CSRF-Token` (fetched from `GET /api/v1/csrf`)
+    on mutations. Native clients send `X-Manage-Client: native` and keep the session
+    cookie in the device secure store.
+
+    Owners and platform administrators must enroll MFA. Most business routes return
+    `403 MFA_REQUIRED` until enrollment is complete. Platform administrators need an
+    expiring access grant for operational reads such as attendance, exact location,
+    corrections support, and exports.
+servers:
+  - url: http://localhost:4000
+    description: Local development
+security:
+  - sessionCookie: []
+tags:
+  - name: Public
+  - name: Session
+  - name: Devices
+  - name: Sites
+  - name: Attendance
+  - name: Presence
+  - name: Alerts
+  - name: Reports
+  - name: Corrections
+  - name: Owner
+  - name: Admin
+  - name: Internal
+  - name: Webhooks
+paths:
+  /health/live:
+    get:
+      tags: [Public]
+      summary: Liveness probe
+      security: []
+      responses:
+        '200': { description: Process is running }
+  /health/ready:
+    get:
+      tags: [Public]
+      summary: Readiness probe (database ping)
+      security: []
+      responses:
+        '200': { description: Ready }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/v1/health:
+    get:
+      tags: [Public]
+      summary: Public service summary
+      security: []
+      responses:
+        '200':
+          description: Component states without secrets
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /api/v1/invitations/{token}:
+    get:
+      tags: [Public]
+      summary: Preview an invitation
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Organization, site, and expiry for a valid invitation }
+        '410': { $ref: '#/components/responses/Error' }
+  /api/v1/invitations/accept:
+    post:
+      tags: [Public]
+      summary: Accept an invitation and create the staff account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, name, password]
+              properties:
+                token: { type: string }
+                name: { type: string, minLength: 2, maxLength: 120 }
+                password: { type: string, minLength: 12, maxLength: 128 }
+      responses:
+        '201': { description: Account created; email verification is required before sign-in }
+        '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+  /api/v1/csrf:
+    get:
+      tags: [Session]
+      summary: Fetch a session-bound CSRF token
+      responses:
+        '200':
+          description: Token for the current session
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { token: { type: string } }
+  /api/v1/me:
+    get:
+      tags: [Session]
+      summary: Current user, memberships, capabilities, and active organization
+      responses:
+        '200': { description: Session summary }
+        '401': { $ref: '#/components/responses/Error' }
+  /api/v1/me/organization:
+    post:
+      tags: [Session]
+      summary: Switch the active organization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [organizationId]
+              properties: { organizationId: { type: string } }
+      responses:
+        '200': { description: Switched }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/me/onboarding:
+    get:
+      tags: [Session]
+      summary: Onboarding checklist state
+      responses:
+        '200': { description: Checklist }
+    patch:
+      tags: [Session]
+      summary: Mark an onboarding step complete
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [step, value]
+              properties:
+                step: { type: string }
+                value: { type: boolean }
+      responses:
+        '200': { description: Updated checklist }
+  /api/v1/me/sites:
+    get:
+      tags: [Session]
+      summary: Sites actively assigned to the signed-in worker
+      responses:
+        '200': { description: Assigned sites }
+  /api/v1/devices:
+    get:
+      tags: [Devices]
+      summary: Registered devices for the current user
+      responses:
+        '200': { description: Device list }
+    post:
+      tags: [Devices]
+      summary: Register or refresh a device and push token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeviceRegistration' }
+      responses:
+        '200': { description: Device }
+  /api/v1/devices/{deviceId}:
+    delete:
+      tags: [Devices]
+      summary: Revoke a device
+      parameters:
+        - { name: deviceId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Revoked }
+  /api/v1/sites:
+    get:
+      tags: [Sites]
+      summary: Sites visible to the current scope
+      parameters:
+        - { name: scope, in: query, schema: { type: string, enum: [current, previous], default: current } }
+      responses:
+        '200':
+          description: Sites with counts, team lead, inspector, and the caller's assignment acceptance
+    post:
+      tags: [Sites]
+      summary: Create a site (owner)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SiteCreate' }
+      responses:
+        '201': { description: Created }
+  /api/v1/sites/{siteId}:
+    get:
+      tags: [Sites]
+      summary: Site detail
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Site }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Sites]
+      summary: Update a site with optimistic versioning
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SiteUpdate' }
+      responses:
+        '200': { description: Updated }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v1/sites/{siteId}/roster:
+    get:
+      tags: [Sites]
+      summary: Active roster with presence and open alert counts
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Roster }
+  /api/v1/sites/{siteId}/member-candidates:
+    get:
+      tags: [Sites]
+      summary: Organization staff available for assignment
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Candidates }
+  /api/v1/sites/{siteId}/assignments:
+    post:
+      tags: [Sites]
+      summary: Assign a member to a site
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [memberId]
+              properties:
+                memberId: { type: string }
+                permissionScope: { type: string, enum: [CLOCK_ONLY, CLOCK_AND_HISTORY] }
+      responses:
+        '201': { description: Assignment created }
+  /api/v1/sites/{siteId}/assignments/{assignmentId}:
+    delete:
+      tags: [Sites]
+      summary: End an assignment
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+        - { name: assignmentId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Assignment ended }
+  /api/v1/sites/{siteId}/assignments/accept:
+    post:
+      tags: [Sites]
+      summary: Accept the caller's site assignment (staff)
+      description: Clock-in is rejected until the assigned staff member accepts.
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Accepted (idempotent)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [siteId, acceptedAt]
+                properties:
+                  siteId: { type: string }
+                  acceptedAt: { type: string, format: date-time }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/sites/{siteId}/team-lead:
+    post:
+      tags: [Sites]
+      summary: Set or clear the site team lead (owner)
+      description: The team lead must be active staff with an active assignment at this site.
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [memberId]
+              properties:
+                memberId: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Team lead updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [siteId, teamLeadId]
+                properties:
+                  siteId: { type: string }
+                  teamLeadId: { type: string, nullable: true }
+                  teamLeadName: { type: string, nullable: true }
+        '403': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /api/v1/sites/{siteId}/inspector:
+    post:
+      tags: [Sites]
+      summary: Assign an inspector or inspect this site personally (owner)
+      description: |
+        An owner may set themselves as inspector or assign active staff who are
+        already assigned to the site. Reports written by the inspector are marked
+        `INSPECTION`.
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [inspectorId]
+              properties:
+                inspectorId: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Inspector updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [siteId, inspectorId, inspectingSelf]
+                properties:
+                  siteId: { type: string }
+                  inspectorId: { type: string, nullable: true }
+                  inspectorName: { type: string, nullable: true }
+                  inspectingSelf: { type: boolean }
+        '403': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /api/v1/sites/{siteId}/reviews:
+    get:
+      tags: [Sites]
+      summary: Site reviews with the caller's own review and the average rating
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Reviews, averageRating, reviewCount, and mine }
+    post:
+      tags: [Sites]
+      summary: Review a site (assigned staff)
+      description: One active review per member per site; a second create returns 409.
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SiteReviewCreate' }
+      responses:
+        '201': { description: Review created }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v1/sites/{siteId}/reviews/{reviewId}:
+    patch:
+      tags: [Sites]
+      summary: Edit the caller's own review with optimistic versioning
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+        - { name: reviewId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SiteReviewUpdate' }
+      responses:
+        '200': { description: Updated }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Sites]
+      summary: Delete the caller's own review
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+        - { name: reviewId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deleted }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/sites/{siteId}/invitations:
+    get:
+      tags: [Sites]
+      summary: Pending invitations for a site
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Invitations }
+    post:
+      tags: [Sites]
+      summary: Invite a staff member by email
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+                note: { type: string, maxLength: 300 }
+      responses:
+        '201': { description: Invitation sent; development responses may include the token }
+  /api/v1/sites/{siteId}/invitations/{invitationId}:
+    delete:
+      tags: [Sites]
+      summary: Revoke a pending invitation
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+        - { name: invitationId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Revoked }
+  /api/v1/shifts/current:
+    get:
+      tags: [Attendance]
+      summary: Current working shift or last ended shift
+      responses:
+        '200': { description: Current shift state with server time }
+  /api/v1/shifts:
+    get:
+      tags: [Attendance]
+      summary: Shift history
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+      responses:
+        '200': { description: Page of shifts }
+  /api/v1/shifts/{shiftId}:
+    get:
+      tags: [Attendance]
+      summary: Shift detail with append-only events and receipt
+      parameters:
+        - { name: shiftId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Shift detail }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/attendance/events:
+    post:
+      tags: [Attendance]
+      summary: Submit a clock-in or clock-out
+      description: |
+        Idempotent by the `Idempotency-Key` header or the client event id. The server
+        derives the user and scope from the session; the client location is evidence,
+        not an authorization claim.
+      parameters:
+        - { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 200 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AttendanceEventInput' }
+      responses:
+        '200': { description: Clock result with outcome ACCEPTED, NEEDS_REVIEW, REJECTED, or DUPLICATE }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v1/attendance/sync:
+    post:
+      tags: [Attendance]
+      summary: Replay a batch of queued attendance events
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [events]
+              properties:
+                events:
+                  type: array
+                  maxItems: 50
+                  items: { $ref: '#/components/schemas/AttendanceEventInput' }
+      responses:
+        '200': { description: Per-item results; one failure does not discard the batch }
+  /api/v1/location/observations:
+    post:
+      tags: [Presence]
+      summary: Ingest a location observation for an active shift
+      description: Duplicate observations are ignored. Stale or inaccurate readings never confirm departure.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ObservationInput' }
+      responses:
+        '202': { description: Observation recorded and presence evaluated }
+  /api/v1/alerts:
+    get:
+      tags: [Alerts]
+      summary: In-app departure alerts for the current user
+      responses:
+        '200': { description: Alerts }
+  /api/v1/alerts/{alertId}:
+    get:
+      tags: [Alerts]
+      summary: Alert detail including explanation and timeline
+      parameters:
+        - { name: alertId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Alert detail; marked read on access }
+  /api/v1/alerts/{alertId}/review:
+    post:
+      tags: [Alerts]
+      summary: Review an alert as the site owner
+      parameters:
+        - { name: alertId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [ACKNOWLEDGED, CONTACTED, DISMISSED] }
+                note: { type: string, maxLength: 500 }
+      responses:
+        '200': { description: Reviewed }
+  /api/v1/reports:
+    get:
+      tags: [Reports]
+      summary: List the caller's reports or team reports (owner)
+      parameters:
+        - { name: scope, in: query, schema: { type: string, enum: [mine, team], default: mine } }
+      responses:
+        '200':
+          description: Report summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ReportSummary' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Reports]
+      summary: Write a report
+      description: |
+        Without `siteId` an active staff member writes a `GENERAL` team report.
+        With `siteId` the caller must be assigned to the site (`SITE`) or be its
+        inspector (`INSPECTION`); the server derives the kind.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportSummary' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/reports/{reportId}:
+    get:
+      tags: [Reports]
+      summary: Read a report (author or owning organization owner)
+      parameters:
+        - { name: reportId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportSummary' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Reports]
+      summary: Edit the caller's own report with optimistic versioning
+      parameters:
+        - { name: reportId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportUpdate' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportSummary' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Reports]
+      summary: Soft-delete the caller's own report
+      parameters:
+        - { name: reportId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deleted }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/v1/corrections:
+    post:
+      tags: [Corrections]
+      summary: Request a correction to your own shift
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CorrectionRequest' }
+      responses:
+        '201': { description: Pending correction }
+    get:
+      tags: [Corrections]
+      summary: List corrections (scope=mine or scope=review)
+      parameters:
+        - { name: scope, in: query, schema: { type: string, enum: [mine, review] } }
+        - { name: status, in: query, schema: { type: string, enum: [PENDING, APPROVED, REJECTED] } }
+      responses:
+        '200': { description: Corrections }
+  /api/v1/corrections/{correctionId}:
+    get:
+      tags: [Corrections]
+      summary: Correction detail with audit trail
+      parameters:
+        - { name: correctionId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Correction detail }
+  /api/v1/corrections/{correctionId}/decision:
+    post:
+      tags: [Corrections]
+      summary: Approve or reject a correction (never your own)
+      parameters:
+        - { name: correctionId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, version]
+              properties:
+                decision: { type: string, enum: [APPROVED, REJECTED] }
+                note: { type: string, maxLength: 500 }
+                version: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Decided }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/v1/owner/overview:
+    get:
+      tags: [Owner]
+      summary: Owner dashboard totals per site
+      responses:
+        '200': { description: Overview }
+  /api/v1/timesheets:
+    get:
+      tags: [Owner]
+      summary: Timesheet rows for owned sites
+      parameters:
+        - { name: siteId, in: query, schema: { type: string } }
+        - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: Rows with totals }
+  /api/v1/exports:
+    post:
+      tags: [Owner]
+      summary: Export timesheets as formula-safe CSV
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to]
+              properties:
+                organizationId: { type: string }
+                siteId: { type: string, nullable: true }
+                from: { type: string, format: date-time }
+                to: { type: string, format: date-time }
+      responses:
+        '200': { description: CSV attachment; exports over 10,000 rows are refused }
+  /api/v1/admin/overview:
+    get:
+      tags: [Admin]
+      summary: Platform totals
+      responses:
+        '200': { description: Overview }
+  /api/v1/admin/organizations:
+    get:
+      tags: [Admin]
+      summary: List organizations
+      responses:
+        '200': { description: Organizations }
+    post:
+      tags: [Admin]
+      summary: Create an organization
+      responses:
+        '201': { description: Created }
+  /api/v1/admin/organizations/{organizationId}:
+    get:
+      tags: [Admin]
+      summary: Organization detail
+      parameters:
+        - { name: organizationId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Detail }
+    patch:
+      tags: [Admin]
+      summary: Update an organization with optimistic versioning
+      parameters:
+        - { name: organizationId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Updated }
+  /api/v1/admin/organizations/{organizationId}/timesheets:
+    get:
+      tags: [Admin]
+      summary: Attendance read for an organization (requires admin.attendance_read)
+      parameters:
+        - { name: organizationId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Rows }
+        '403': { $ref: '#/components/responses/Error' }
+  /api/v1/admin/users:
+    get:
+      tags: [Admin]
+      summary: Memberships and access
+      responses:
+        '200': { description: Users }
+  /api/v1/admin/memberships/{membershipId}:
+    patch:
+      tags: [Admin]
+      summary: Change a membership; the last active platform admin cannot be removed
+      parameters:
+        - { name: membershipId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Updated }
+  /api/v1/admin/sites:
+    get:
+      tags: [Admin]
+      summary: Platform site directory
+      responses:
+        '200': { description: Sites }
+  /api/v1/admin/sites/{siteId}:
+    patch:
+      tags: [Admin]
+      summary: Update a site with a reason
+      parameters:
+        - { name: siteId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Updated }
+  /api/v1/admin/audit:
+    get:
+      tags: [Admin]
+      summary: Hash-chained audit log
+      responses:
+        '200': { description: Audit events with sequence and hash }
+  /api/v1/admin/health:
+    get:
+      tags: [Admin]
+      summary: Database, worker heartbeat, outbox, and provider state
+      responses:
+        '200': { description: Health detail }
+  /api/v1/admin/deliveries:
+    get:
+      tags: [Admin]
+      summary: Outbox deliveries
+      responses:
+        '200': { description: Deliveries }
+  /api/v1/admin/deliveries/retry:
+    post:
+      tags: [Admin]
+      summary: Retry dead or failed deliveries (recent authentication required)
+      responses:
+        '200': { description: Retried }
+  /api/v1/admin/grants:
+    get:
+      tags: [Admin]
+      summary: Access grants
+      responses:
+        '200': { description: Grants }
+    post:
+      tags: [Admin]
+      summary: Create an expiring access grant (recent authentication required)
+      responses:
+        '201': { description: Created }
+  /api/v1/admin/grants/{grantId}:
+    delete:
+      tags: [Admin]
+      summary: Revoke a grant (recent authentication required)
+      parameters:
+        - { name: grantId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Revoked }
+  /api/v1/internal/worker/tick:
+    get:
+      tags: [Internal]
+      summary: Scheduled outbox tick (Vercel Cron form)
+      description: |
+        Machine-only. Vercel Cron calls this with `Authorization: Bearer $CRON_SECRET`;
+        this repo schedules the worker with GitHub Actions instead and uses the POST
+        form below.
+        Returns 404 when neither `CRON_SECRET` nor `WORKER_TRIGGER_SECRET` is configured.
+      security: []
+      parameters:
+        - { name: max, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 40 } }
+      responses:
+        '200': { description: Tick summary with ok, delivered, failed, reconciled, and purged counts }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { description: The tick ran but reported ok false }
+    post:
+      tags: [Internal]
+      summary: Scheduled outbox tick (GitHub Actions)
+      description: |
+        Machine-only; this is the form `.github/workflows/worker-tick.yml` calls.
+        Accepts the same bearer secret in `Authorization` or `X-Manage-Worker-Secret`.
+      security: []
+      parameters:
+        - { name: max, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 40 } }
+      responses:
+        '200': { description: Tick summary }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { description: The tick ran but reported ok false }
+  /api/v1/webhooks/resend:
+    post:
+      tags: [Webhooks]
+      summary: Resend delivery events
+      description: |
+        Raw-body Svix signature verification with a five minute replay window.
+        Events are deduplicated by the Svix event id and update outbox delivery state.
+      security: []
+      parameters:
+        - { name: svix-id, in: header, required: true, schema: { type: string } }
+        - { name: svix-timestamp, in: header, required: true, schema: { type: string } }
+        - { name: svix-signature, in: header, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Processed or duplicate }
+        '401': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: better-auth.session_token
+  responses:
+    Error:
+      description: Error envelope
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code:
+              type: string
+              enum:
+                [UNAUTHENTICATED, MFA_REQUIRED, FORBIDDEN, NOT_FOUND, VALIDATION_ERROR,
+                 CONFLICT, IDEMPOTENCY_CONFLICT, RATE_LIMITED, INVITATION_INVALID,
+                 INVITATION_EXPIRED, SHIFT_ALREADY_ACTIVE, SHIFT_NOT_ACTIVE, STALE_VERSION,
+                 SELF_APPROVAL_FORBIDDEN, EXPORT_TOO_LARGE, PROVIDER_UNAVAILABLE, INTERNAL_ERROR]
+            message: { type: string }
+            fields:
+              type: object
+              additionalProperties:
+                type: array
+                items: { type: string }
+            requestId: { type: string }
+    DeviceRegistration:
+      type: object
+      required: [deviceId, platform, appVersion]
+      properties:
+        deviceId: { type: string, minLength: 8, maxLength: 160 }
+        platform: { type: string, enum: [ios, android] }
+        appVersion: { type: string, maxLength: 40 }
+        pushToken: { type: string, nullable: true }
+        pushEnabled: { type: boolean }
+    SitePolicy:
+      type: object
+      required: [radiusMeters]
+      properties:
+        radiusMeters: { type: integer, minimum: 50, maximum: 2000 }
+        exitBufferMeters: { type: integer, minimum: 0, maximum: 500 }
+        entryBufferMeters: { type: integer, minimum: 0, maximum: 500 }
+        graceSeconds: { type: integer, minimum: 30, maximum: 1800 }
+        maxAccuracyMeters: { type: integer, minimum: 5, maximum: 200 }
+        freshnessSeconds: { type: integer, minimum: 30, maximum: 600 }
+    SiteCreate:
+      type: object
+      required: [organizationId, name, address, latitude, longitude, timezone, policy]
+      properties:
+        organizationId: { type: string }
+        name: { type: string, minLength: 2, maxLength: 120 }
+        address: { type: string, minLength: 4, maxLength: 300 }
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+        timezone: { type: string }
+        policy: { $ref: '#/components/schemas/SitePolicy' }
+    SiteUpdate:
+      type: object
+      required: [version]
+      properties:
+        name: { type: string }
+        address: { type: string }
+        latitude: { type: number }
+        longitude: { type: number }
+        timezone: { type: string }
+        policy: { $ref: '#/components/schemas/SitePolicy' }
+        version: { type: integer, minimum: 1 }
+    AttendanceEventInput:
+      type: object
+      required: [clientEventId, clientShiftId, deviceId, siteId, type, capturedAt]
+      properties:
+        clientEventId: { type: string, format: uuid }
+        clientShiftId: { type: string, format: uuid }
+        deviceId: { type: string, minLength: 8, maxLength: 160 }
+        siteId: { type: string }
+        type: { type: string, enum: [CLOCK_IN, CLOCK_OUT] }
+        capturedAt: { type: string, format: date-time }
+        sitePolicyVersion: { type: integer, minimum: 1 }
+        note: { type: string, maxLength: 500 }
+        location:
+          type: object
+          nullable: true
+          required: [latitude, longitude, accuracyMeters, capturedAt]
+          properties:
+            latitude: { type: number }
+            longitude: { type: number }
+            accuracyMeters: { type: number }
+            capturedAt: { type: string, format: date-time }
+    ObservationInput:
+      type: object
+      required: [clientObservationId, shiftId, siteId, latitude, longitude, accuracyMeters, capturedAt]
+      properties:
+        clientObservationId: { type: string, format: uuid }
+        shiftId: { type: string }
+        siteId: { type: string }
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+        accuracyMeters: { type: number, minimum: 0, maximum: 10000 }
+        capturedAt: { type: string, format: date-time }
+        source: { type: string, enum: [FOREGROUND, BACKGROUND, MANUAL], default: BACKGROUND }
+    ReportCreate:
+      type: object
+      required: [title, body]
+      properties:
+        title: { type: string, minLength: 3, maxLength: 140 }
+        body: { type: string, minLength: 1, maxLength: 10000 }
+        siteId: { type: string }
+        reportDate: { type: string, format: date-time }
+    ReportUpdate:
+      type: object
+      required: [version]
+      properties:
+        title: { type: string, minLength: 3, maxLength: 140 }
+        body: { type: string, minLength: 1, maxLength: 10000 }
+        siteId: { type: string, nullable: true }
+        reportDate: { type: string, format: date-time }
+        version: { type: integer, minimum: 1 }
+    ReportSummary:
+      type: object
+      required: [id, organizationId, kind, authorId, authorName, title, body, reportDate, version]
+      properties:
+        id: { type: string }
+        organizationId: { type: string }
+        siteId: { type: string, nullable: true }
+        siteName: { type: string, nullable: true }
+        kind: { type: string, enum: [GENERAL, SITE, INSPECTION] }
+        authorId: { type: string }
+        authorName: { type: string }
+        title: { type: string }
+        body: { type: string }
+        reportDate: { type: string, format: date-time }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    SiteReviewCreate:
+      type: object
+      required: [rating, comment]
+      properties:
+        rating: { type: integer, minimum: 1, maximum: 5 }
+        comment: { type: string, minLength: 3, maxLength: 1000 }
+    SiteReviewUpdate:
+      type: object
+      required: [version]
+      properties:
+        rating: { type: integer, minimum: 1, maximum: 5 }
+        comment: { type: string, minLength: 3, maxLength: 1000 }
+        version: { type: integer, minimum: 1 }
+    CorrectionRequest:
+      type: object
+      required: [shiftId, proposedStartAt, reason]
+      properties:
+        shiftId: { type: string }
+        proposedStartAt: { type: string, format: date-time }
+        proposedEndAt: { type: string, format: date-time, nullable: true }
+        reason: { type: string, minLength: 8, maxLength: 500 }
+        requestNote: { type: string, maxLength: 500 }
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [ok, degraded, down] }
+        database: { type: string, enum: [ok, down] }
+        worker:
+          type: object
+          properties:
+            lastHeartbeatAt: { type: string, nullable: true }
+            ageSeconds: { type: number, nullable: true }
+            state: { type: string, enum: [ok, stale, unknown] }
+        outbox:
+          type: object
+          properties:
+            pending: { type: number }
+            leased: { type: number }
+            dead: { type: number }
+            oldestPendingAt: { type: string, nullable: true }
