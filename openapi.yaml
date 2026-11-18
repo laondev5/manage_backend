@@ -549,9 +549,12 @@ paths:
       tags: [Reports]
       summary: Write a report
       description: |
-        Without `siteId` an active staff member writes a `GENERAL` team report.
-        With `siteId` the caller must be assigned to the site (`SITE`) or be its
-        inspector (`INSPECTION`); the server derives the kind.
+        Without `siteId` an active staff member or site owner writes a `GENERAL`
+        team report. With `siteId` the caller must be assigned to the site
+        (`SITE`), be its inspector (`INSPECTION`), or own the site's organization
+        (`INSPECTION`); the server derives the kind. `body` and each field body
+        are sanitized rich text when `bodyFormat` is `html` (the default);
+        `text` is kept verbatim for older clients.
       requestBody:
         required: true
         content:
@@ -953,12 +956,23 @@ components:
         accuracyMeters: { type: number, minimum: 0, maximum: 10000 }
         capturedAt: { type: string, format: date-time }
         source: { type: string, enum: [FOREGROUND, BACKGROUND, MANUAL], default: BACKGROUND }
+    ReportField:
+      type: object
+      required: [heading, body]
+      properties:
+        heading: { type: string, minLength: 1, maxLength: 120 }
+        body: { type: string, minLength: 1, maxLength: 5000, description: 'Sanitized rich text (HTML) for this field.' }
     ReportCreate:
       type: object
       required: [title, body]
       properties:
         title: { type: string, minLength: 3, maxLength: 140 }
-        body: { type: string, minLength: 1, maxLength: 10000 }
+        body: { type: string, minLength: 1, maxLength: 20000 }
+        bodyFormat: { type: string, enum: [text, html], default: html }
+        fields:
+          type: array
+          maxItems: 6
+          items: { $ref: '#/components/schemas/ReportField' }
         siteId: { type: string }
         reportDate: { type: string, format: date-time }
     ReportUpdate:
@@ -966,13 +980,19 @@ components:
       required: [version]
       properties:
         title: { type: string, minLength: 3, maxLength: 140 }
-        body: { type: string, minLength: 1, maxLength: 10000 }
+        body: { type: string, minLength: 1, maxLength: 20000 }
+        bodyFormat: { type: string, enum: [text, html] }
+        fields:
+          type: array
+          maxItems: 6
+          items: { $ref: '#/components/schemas/ReportField' }
+          description: Replaces the report's fields; send an empty array to remove them.
         siteId: { type: string, nullable: true }
         reportDate: { type: string, format: date-time }
         version: { type: integer, minimum: 1 }
     ReportSummary:
       type: object
-      required: [id, organizationId, kind, authorId, authorName, title, body, reportDate, version]
+      required: [id, organizationId, kind, authorId, authorName, title, body, bodyFormat, fields, reportDate, version]
       properties:
         id: { type: string }
         organizationId: { type: string }
@@ -983,6 +1003,10 @@ components:
         authorName: { type: string }
         title: { type: string }
         body: { type: string }
+        bodyFormat: { type: string, enum: [text, html] }
+        fields:
+          type: array
+          items: { $ref: '#/components/schemas/ReportField' }
         reportDate: { type: string, format: date-time }
         version: { type: integer }
         createdAt: { type: string, format: date-time }

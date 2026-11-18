@@ -3,10 +3,14 @@ import {
   conflict,
   forbidden,
   notFound,
+  validationError,
+  type ReportBodyFormat,
   type ReportCreateInput,
+  type ReportField,
   type ReportSummary,
   type ReportUpdateInput,
 } from '../contracts/index.js';
+import { hasReportText, sanitizeReportHtml } from '../domain/index.js';
 import {
   appendAudit,
   findSite,
@@ -25,6 +29,30 @@ function requireOwnerReports(auth: AuthContext) {
   }
 }
 
+/**
+ * Store what the reporter wrote, minus anything the app cannot produce itself.
+ * Plain text is kept verbatim so older reports and clients are not mangled.
+ */
+function prepareBody(body: string, format: ReportBodyFormat): string {
+  if (format === 'text') {
+    const text = body.trim();
+    if (!text) throw validationError('Write the report.', { body: ['Write the report.'] });
+    return text;
+  }
+  const clean = sanitizeReportHtml(body);
+  if (!hasReportText(clean)) {
+    throw validationError('Write the report.', { body: ['Write the report.'] });
+  }
+  return clean;
+}
+
+function prepareFields(fields: ReportField[] | undefined): ReportField[] {
+  return (fields ?? []).map((field) => ({
+    heading: field.heading.trim(),
+    body: prepareBody(field.body, 'html'),
+  }));
+}
+
 async function reportScope(
   db: Database,
   auth: AuthContext,
@@ -35,23 +63,28 @@ async function reportScope(
     if (!site || site.deletedAt) throw notFound('Site not found.');
     const isAssignee = auth.actor.assignedSiteIds.includes(site._id.toHexString());
     const isInspector = site.inspectorId === auth.user.id;
-    if (!isAssignee && !isInspector) {
-      throw forbidden('Only staff assigned to this site or its inspector can report on it.');
+    const isOwner =
+      auth.capabilities.includes('owner.reports') &&
+      auth.actor.ownedOrganizationIds.includes(site.organizationId.toHexString());
+    if (!isAssignee && !isInspector && !isOwner) {
+      throw forbidden(
+        'Only staff assigned to this site, its inspector, or a site owner can report on it.',
+      );
     }
     return {
       organizationId: site.organizationId,
       siteId: site._id,
-      kind: isInspector ? 'INSPECTION' : 'SITE',
+      kind: isInspector || isOwner ? 'INSPECTION' : 'SITE',
     };
   }
   const membership = auth.context.memberships.find(
     (entry) =>
-      entry.membership.role === 'STAFF' &&
+      (entry.membership.role === 'STAFF' || entry.membership.role === 'SITE_OWNER') &&
       entry.membership.status === 'ACTIVE' &&
       entry.organization.status === 'ACTIVE',
   );
   if (!membership) {
-    throw forbidden('General team reports are available for active staff accounts.');
+    throw forbidden('General reports are available for active staff and site owners.');
   }
   return { organizationId: membership.organization._id, siteId: null, kind: 'GENERAL' };
 }
@@ -79,6 +112,8 @@ async function toSummaries(
     authorName: users.get(doc.authorId)?.name ?? 'Team member',
     title: doc.title,
     body: doc.body,
+    bodyFormat: doc.bodyFormat ?? 'text',
+    fields: doc.fields ?? [],
     reportDate: doc.reportDate.toISOString(),
     version: doc.version,
     createdAt: doc.createdAt.toISOString(),
@@ -147,7 +182,9 @@ export async function createReport(
     authorId: auth.user.id,
     kind: scope.kind,
     title: input.title,
-    body: input.body,
+    body: prepareBody(input.body, input.bodyFormat),
+    bodyFormat: input.bodyFormat,
+    fields: prepareFields(input.fields),
     reportDate: input.reportDate ? new Date(input.reportDate) : now,
     version: 1,
     createdAt: now,
@@ -166,7 +203,7 @@ export async function createReport(
     siteId: report.siteId,
     requestId,
     summary: `Submitted the report "${report.title}".`,
-    meta: { siteId: report.siteId?.toHexString() ?? null },
+    meta: { siteId: report.siteId?.toHexString() ?? null, fields: report.fields.length },
   });
   const [summary] = await toSummaries(db, [report]);
   if (!summary) throw notFound('Report not found.');
@@ -190,7 +227,14 @@ export async function updateReport(
     input.siteId !== undefined ? await reportScope(db, auth, input.siteId) : null;
   const $set: Record<string, unknown> = { updatedAt: new Date() };
   if (input.title !== undefined) $set.title = input.title;
-  if (input.body !== undefined) $set.body = input.body;
+  if (input.body !== undefined) {
+    const format = input.bodyFormat ?? report.bodyFormat ?? 'html';
+    $set.body = prepareBody(input.body, format);
+    $set.bodyFormat = format;
+  } else if (input.bodyFormat !== undefined) {
+    throw validationError('Send the report body when changing its format.');
+  }
+  if (input.fields !== undefined) $set.fields = prepareFields(input.fields);
   if (input.reportDate !== undefined) $set.reportDate = new Date(input.reportDate);
   if (scope) {
     $set.siteId = scope.siteId;
@@ -216,7 +260,7 @@ export async function updateReport(
     siteId: updated.siteId,
     requestId,
     summary: `Updated the report "${updated.title}".`,
-    meta: { version: updated.version },
+    meta: { version: updated.version, fields: updated.fields?.length ?? 0 },
   });
   const [summary] = await toSummaries(db, [updated]);
   if (!summary) throw notFound('Report not found.');

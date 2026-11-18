@@ -5,3 +5,4 @@ export * from './attendance.js';
 export * from './time.js';
 export * from './csv.js';
 export * from './outbox.js';
+export * from './report-content.js';

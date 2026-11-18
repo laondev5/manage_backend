@@ -153,6 +153,86 @@ describe('staff reports, site reviews, and site roles', () => {
     expect(teamScope.status).toBe(403);
   });
 
+  it('keeps rich text fields and strips unsafe markup', async () => {
+    const created = await post(staffAAgent, '/api/v1/reports', {
+      title: 'Bay inspection',
+      body: '<p onclick="steal()">Bay is <strong>clear</strong>.</p><script>alert(1)</script>',
+      fields: [
+        { heading: 'People involved', body: '<p>Night supervisor</p>' },
+        { heading: 'Action taken', body: '<ul><li>Locked the shutter</li></ul>' },
+      ],
+      siteId: site._id.toHexString(),
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.bodyFormat).toBe('html');
+    expect(created.body.body).toBe('<p>Bay is <strong>clear</strong>.</p>');
+    expect(created.body.fields).toEqual([
+      { heading: 'People involved', body: '<p>Night supervisor</p>' },
+      { heading: 'Action taken', body: '<ul><li>Locked the shutter</li></ul>' },
+    ]);
+
+    const fetched = await staffAAgent.get(`/api/v1/reports/${created.body.id}`);
+    expect(fetched.body.fields[1].heading).toBe('Action taken');
+
+    const emptyText = await post(staffAAgent, '/api/v1/reports', {
+      title: 'Nothing to say',
+      body: '<p>&nbsp;</p>',
+    });
+    expect(emptyText.status).toBe(422);
+
+    const tooManyFields = await post(staffAAgent, '/api/v1/reports', {
+      title: 'Too many fields',
+      body: '<p>Text</p>',
+      fields: Array.from({ length: 7 }, (_, index) => ({
+        heading: `Field ${index}`,
+        body: '<p>Text</p>',
+      })),
+    });
+    expect(tooManyFields.status).toBe(422);
+  });
+
+  it('lets an owner write site and general reports the same way staff do', async () => {
+    const siteReport = await post(ownerAgent, '/api/v1/reports', {
+      title: 'Owner walkthrough',
+      body: '<p>Checked the yard myself.</p>',
+      fields: [{ heading: 'Follow-up', body: '<p>Replace two bollards.</p>' }],
+      siteId: site._id.toHexString(),
+    });
+    expect(siteReport.status).toBe(201);
+    expect(siteReport.body.kind).toBe('INSPECTION');
+    expect(siteReport.body.authorId).toBe(ownerId);
+    expect(siteReport.body.siteId).toBe(site._id.toHexString());
+    expect(siteReport.body.fields).toEqual([
+      { heading: 'Follow-up', body: '<p>Replace two bollards.</p>' },
+    ]);
+
+    const general = await post(ownerAgent, '/api/v1/reports', {
+      title: 'Week in review',
+      body: '<p>Quiet week across the portfolio.</p>',
+    });
+    expect(general.status).toBe(201);
+    expect(general.body.kind).toBe('GENERAL');
+    expect(general.body.siteId).toBeNull();
+
+    const mine = await ownerAgent.get('/api/v1/reports');
+    expect(mine.body).toHaveLength(2);
+    const team = await ownerAgent.get('/api/v1/reports?scope=team');
+    expect(team.body).toHaveLength(2);
+
+    const otherSite = await ctx.createSite({
+      organization: await ctx.createOrganization('Other Org', 'roles-owner@example.com'),
+      name: 'Not Yours',
+      ownerIds: [],
+      createdBy: ownerId,
+    });
+    const blocked = await post(ownerAgent, '/api/v1/reports', {
+      title: 'Wrong site',
+      body: '<p>Nope.</p>',
+      siteId: otherSite._id.toHexString(),
+    });
+    expect(blocked.status).toBe(403);
+  });
+
   it('blocks clock-in until the staff member accepts the site assignment', async () => {
     const fresh = await ctx.createSite({
       organization,
@@ -294,10 +374,11 @@ describe('staff reports, site reviews, and site roles', () => {
 
     const beforeInspection = await post(ownerAgent, '/api/v1/reports', {
       title: 'Untethered inspection',
-      body: 'This should fail until the owner is the inspector.',
+      body: '<p>Yard checked before assigning staff.</p>',
       siteId,
     });
-    expect(beforeInspection.status).toBe(403);
+    expect(beforeInspection.status).toBe(201);
+    expect(beforeInspection.body.kind).toBe('INSPECTION');
 
     const self = await post(ownerAgent, `/api/v1/sites/${siteId}/inspector`, {
       inspectorId: ownerId,

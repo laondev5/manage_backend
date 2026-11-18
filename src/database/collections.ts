@@ -241,6 +241,10 @@ export type ReportDoc = {
   kind: 'GENERAL' | 'SITE' | 'INSPECTION';
   title: string;
   body: string;
+  /** 'html' for rich text written in the app; 'text' for older plain-text reports. */
+  bodyFormat: 'text' | 'html';
+  /** Extra titled rich text blocks the reporter added. */
+  fields: { heading: string; body: string }[];
   /** Day the report is about; defaults to the creation date. */
   reportDate: Date;
   version: number;
