@@ -25,7 +25,15 @@ attendance invariants:
   that unit partially applied on standalone; reconciliation and the next
   observation heal presence, and the event log stays append-only.
 
-Verified locally: `pnpm lint`, `pnpm typecheck`, `pnpm test` (43 tests),
+Re-verified 2026-11-18 (later session, after the invitation/callbackURL fixes):
+`pnpm lint`, `pnpm typecheck`, `pnpm test` (48 unit tests), `pnpm test:integration`
+(34 tests across five files, isolated binary via `MONGOMS_SYSTEM_BINARY`), and
+`pnpm build` with the serverless import check all pass. The hosted API health
+endpoint returns `200 {"status":"ok","service":"manage-api"}`, confirming the
+startup fix in production. The invitation/verification link fixes are committed
+locally as `b43faf8` but were not pushed (pushing can trigger a Vercel deploy).
+
+Verified locally on 2026-11-18: `pnpm lint`, `pnpm typecheck`, `pnpm test` (43 tests),
 `pnpm test:integration` (34 tests across five files, including a new
 `standalone-mongo.integration.test.ts` that runs against a standalone
 in-memory mongod: capability detection, replay dedupe, one-active-shift under
