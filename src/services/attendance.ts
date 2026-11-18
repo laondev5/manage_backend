@@ -318,7 +318,18 @@ async function clockIn(
   try {
     await withTransaction(db, async (session) => {
       await insertShift(db.c, shift, session);
-      await insertAttendanceEvent(db.c, event, session);
+      try {
+        await insertAttendanceEvent(db.c, event, session);
+      } catch (error) {
+        if (db.supportsTransactions === false) {
+          // No transaction rolled the shift insert back; remove the eventless
+          // shift so the account is not wedged with an unclock-outable start.
+          await db.c.shifts
+            .deleteOne({ _id: shift._id, status: 'WORKING', startEventId: eventId, version: 1 })
+            .catch(() => undefined);
+        }
+        throw error;
+      }
     });
   } catch (error) {
     if (isDuplicateKey(error)) {

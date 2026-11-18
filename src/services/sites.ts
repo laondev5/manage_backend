@@ -884,36 +884,53 @@ export async function acceptInvitationWorkflow(
     throw new AppError(404, 'INVITATION_INVALID', 'This invitation link is not valid.');
   }
 
-  await withTransaction(db, async (session) => {
-    const consumed = await markInvitationAccepted(db.c, invitation._id, input.userId, session);
-    if (!consumed) throw conflict('This invitation has already been used.');
-    const existing = await findActiveMembership(db.c, invitation.organizationId, input.userId);
-    const membership =
-      existing ??
-      (await createMembership(
-        db.c,
-        { organizationId: invitation.organizationId, userId: input.userId, role: 'STAFF' },
-        session,
-      ));
-    if (site) {
-      const assignment = await findActiveAssignment(db.c, site._id, input.userId);
-      if (!assignment) {
-        await createAssignment(
+  let consumedHere = false;
+  try {
+    await withTransaction(db, async (session) => {
+      const consumed = await markInvitationAccepted(db.c, invitation._id, input.userId, session);
+      if (!consumed) throw conflict('This invitation has already been used.');
+      consumedHere = true;
+      const existing = await findActiveMembership(db.c, invitation.organizationId, input.userId);
+      const membership =
+        existing ??
+        (await createMembership(
           db.c,
-          {
-            organizationId: invitation.organizationId,
-            siteId: site._id,
-            memberId: input.userId,
-            membershipId: membership._id,
-            permissionScope: 'CLOCK_AND_HISTORY',
-            acceptedAt: new Date(),
-            createdBy: invitation.createdBy,
-          },
+          { organizationId: invitation.organizationId, userId: input.userId, role: 'STAFF' },
           session,
-        );
+        ));
+      if (site) {
+        const assignment = await findActiveAssignment(db.c, site._id, input.userId);
+        if (!assignment) {
+          await createAssignment(
+            db.c,
+            {
+              organizationId: invitation.organizationId,
+              siteId: site._id,
+              memberId: input.userId,
+              membershipId: membership._id,
+              permissionScope: 'CLOCK_AND_HISTORY',
+              acceptedAt: new Date(),
+              createdBy: invitation.createdBy,
+            },
+            session,
+          );
+        }
       }
+    });
+  } catch (error) {
+    if (db.supportsTransactions === false && consumedHere) {
+      // Without a transaction the token stays consumed even though membership
+      // or assignment failed; release it so the invitee can retry. A partially
+      // created membership is reused idempotently on the next attempt.
+      await db.c.invitations
+        .updateOne(
+          { _id: invitation._id, status: 'ACCEPTED', acceptedBy: input.userId },
+          { $set: { status: 'PENDING', acceptedAt: null, acceptedBy: null } },
+        )
+        .catch(() => undefined);
     }
-  });
+    throw error;
+  }
 
   await appendAudit(db.c, {
     actorId: input.userId,

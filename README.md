@@ -5,7 +5,9 @@ and worker code is under `src/`; no sibling project is required.
 
 Use Node 22 LTS and pnpm 10.20.0. Run `pnpm install --frozen-lockfile`, copy
 `.env.example` to `.env`, then `pnpm db:dev` and `pnpm dev` in separate terminals.
-MongoDB must be a replica set. `pnpm dev:worker` runs the optional local worker.
+MongoDB replica sets are preferred; standalone servers work through a
+non-transactional fallback (docs/deployment-vercel.md, section 2).
+`pnpm dev:worker` runs the optional local worker.
 `pnpm bootstrap:admin` creates the initial administrator. The local seed script
 is intentionally not distributed.
 

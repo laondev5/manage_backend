@@ -14,7 +14,10 @@ export function createAuth(db: Database, env: Env, logger: Logger, mailer = crea
     baseURL: env.AUTH_BASE_URL,
     basePath: '/api/auth',
     secret: env.BETTER_AUTH_SECRET,
-    database: mongodbAdapter(db.db, { client: db.client }),
+    database: mongodbAdapter(db.db, {
+      client: db.client,
+      transaction: db.supportsTransactions !== false,
+    }),
     trustedOrigins: [
       ...env.trustedWebOrigins,
       `${env.MOBILE_SCHEME}://`,

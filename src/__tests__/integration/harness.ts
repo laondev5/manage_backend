@@ -1,6 +1,6 @@
 import '../../load-env.js';
 import { createHmac } from 'node:crypto';
-import { MongoMemoryReplSet } from 'mongodb-memory-server';
+import { MongoMemoryReplSet, MongoMemoryServer } from 'mongodb-memory-server';
 import request from 'supertest';
 import { ObjectId } from 'mongodb';
 import { pino } from 'pino';
@@ -58,10 +58,15 @@ export function totpCode(base32Secret: string, now = Date.now()): string {
 
 export type TestContext = Awaited<ReturnType<typeof createTestContext>>;
 
-export async function createTestContext(overrides: NodeJS.ProcessEnv = {}) {
-  const mongo = await MongoMemoryReplSet.create({
-    replSet: { count: 1, storageEngine: 'wiredTiger' },
-  });
+export async function createTestContext(
+  overrides: NodeJS.ProcessEnv = {},
+  options: { standalone?: boolean } = {},
+) {
+  const mongo = options.standalone
+    ? await MongoMemoryServer.create()
+    : await MongoMemoryReplSet.create({
+        replSet: { count: 1, storageEngine: 'wiredTiger' },
+      });
   const uri = mongo.getUri('manage_test');
   const env = loadEnv({
     NODE_ENV: 'test',

@@ -1,5 +1,38 @@
 # Standalone backend validation — 2026-11-18
 
+## Standalone MongoDB support (shared-server fallback)
+
+The configured production database is a shared standalone `mongod` that cannot
+be converted to a replica set. The API now supports it without losing the
+attendance invariants:
+
+- `connectDatabase` checks `hello` at connect time. On a standalone server it
+  reconnects with `retryWrites: false` (standalone rejects every txnNumber
+  write, retryable writes included) and sets `supportsTransactions: false`.
+- `withTransaction` runs write units in a plain session when transactions are
+  unavailable, and also falls back at runtime if a server that reported a
+  replica set rejects transaction numbers (code 20).
+- Better Auth's MongoDB adapter is configured with `transaction: false` on
+  standalone, as its documentation requires.
+- Invariants rest on the existing unique indexes (one active WORKING shift per
+  user, client-shift uniqueness, clock-event replay uniqueness) plus two
+  compensating writes: a clock-in whose event insert fails deletes its own
+  eventless shift, and an invitation accept whose membership/assignment fails
+  releases the token for retry (a partially created membership is reused
+  idempotently).
+- Residual risk, documented in the runbook: a crash between the individual
+  writes of presence observations, clock-out, or correction review can leave
+  that unit partially applied on standalone; reconciliation and the next
+  observation heal presence, and the event log stays append-only.
+
+Verified locally: `pnpm lint`, `pnpm typecheck`, `pnpm test` (43 tests),
+`pnpm test:integration` (34 tests across five files, including a new
+`standalone-mongo.integration.test.ts` that runs against a standalone
+in-memory mongod: capability detection, replay dedupe, one-active-shift under
+concurrency, clock-out/re-clock, injected event-insert failure compensation,
+and end-to-end invitation accept), and `pnpm build` with the serverless bundle
+import check. No production data was modified.
+
 ## Serverless bundle regression
 
 After the rich-text report update, direct import of the generated ESM bundle

@@ -9,7 +9,8 @@ Production topology:
 ```
 Browser ──► Vercel project: web (Next.js)
               └─ /api/v1/* and /api/auth/* rewrites ──► Vercel project: api (Express)
-                                                          └─ MongoDB Atlas (replica set)
+                                                          └─ MongoDB (replica set preferred;
+                                                             standalone supported)
 
 Expo app ──────────────────────────────────────────────► Vercel project: api
 
@@ -35,9 +36,11 @@ Express API have different runtimes, environment variables, and build outputs.
   use; a business deployment needs Pro (or higher) for licensing and
   production-appropriate limits. Scheduling the worker with GitHub Actions
   instead of Vercel Cron removes the paid-plan constraints on cron frequency.
-- A MongoDB Atlas cluster. Atlas clusters are replica sets, which the API needs
-  for transactions. Use M0 only for smoke tests; its IOPS and connection limits
-  are not sized for production traffic.
+- A MongoDB deployment. Replica sets (every Atlas cluster is one) are preferred
+  because multi-document writes then run in transactions. A standalone `mongod`
+  is also supported through a runtime fallback (section 2, step 5). Use M0 only
+  for smoke tests; its IOPS and connection limits are not sized for production
+  traffic.
 - A Resend account with a verified sending domain. Email is required in
   production: the API refuses to boot without `RESEND_API_KEY` and
   `RESEND_WEBHOOK_SECRET`.
@@ -65,7 +68,37 @@ Use a different value for `BETTER_AUTH_SECRET` and `WORKER_TRIGGER_SECRET`.
 3. Network access: Vercel functions have dynamic egress addresses. Add
    `0.0.0.0/0` and rely on the database user credentials, or use Vercel Secure
    Compute (Enterprise) if private networking is required.
-4. Copy the SRV connection string and keep `retryWrites=true`.
+4. Copy the connection string. On Atlas keep the default `retryWrites=true`.
+   On a standalone server omit `retryWrites` (or set `retryWrites=false`) and
+   do not add a `replicaSet` parameter — the driver refuses both against a
+   standalone `mongod`. The API re-checks the topology at connect time and
+   disables retryable writes itself when it sees a standalone server.
+5. Replica sets are preferred; **standalone servers are supported**. On a
+   replica set or mongos, attendance, corrections and the outbox run in MongoDB
+   transactions. A standalone `mongod` rejects transaction numbers with
+   `MongoServerError` code 20 `IllegalOperation` ("Transaction numbers are only
+   allowed on a replica set member or mongos"). The API detects standalone
+   topology at connect time (`hello`), reconnects with retryable writes
+   disabled, turns off Better Auth's adapter transactions, and runs each write
+   unit in a plain session; a runtime guard also falls back if a server that
+   reported a replica set later rejects transaction numbers. The invariants
+   then rest on unique
+   indexes (one active shift per user, clock-event replay protection) plus
+   compensating writes: a clock-in whose event insert fails deletes its own
+   eventless shift, and an invitation accept whose membership/assignment fails
+   releases the token so the invitee can retry. Check the topology with
+   `db.command({ hello: 1 })`: a `setName` means transactions are available.
+   Residual risk on standalone: a crash between the individual writes of a
+   presence observation, clock-out, or correction review can leave that unit
+   partially applied; the next observation and the worker's reconciliation heal
+   presence state, and the append-only event log keeps history auditable. If
+   you own the server and want full atomicity, convert a self-hosted single
+   node by adding `replication.replSetName` plus a `security.keyFile` (required
+   when authorization is enabled), restarting, then
+   `rs.initiate({_id:"rs0",members:[{_id:0,host:"<public-host>:27017"}]})`.
+   Advertise a host reachable by every client, never `localhost`. No URI change
+   is needed afterwards. Never convert a shared server you do not own — the
+   fallback exists for exactly that case.
 
 Create indexes and verify them **once from a trusted machine**, not from a
 serverless request:
