@@ -177,4 +177,65 @@ describe('admin organization and people management', () => {
     expect(response.status).toBe(200);
     expect(await ctx.c.users.countDocuments({ _id: ownerId, status: 'DISABLED' })).toBe(0);
   });
+
+  it('refuses to let an admin delete their own account', async () => {
+    const response = await mutate(admin, 'delete', `/api/v1/admin/users/${adminUserId}`, {
+      reason: 'self deletion attempt',
+    });
+    expect(response.status).toBe(409);
+  });
+
+  it('deletes a user and revokes access without erasing their identity', async () => {
+    const email = 'delete-target@example.com';
+    const targetId = await ctx.createUser(email, 'Delete Target');
+    const organization = await ctx.createOrganization('Delete Target Org', email);
+    const membership = await ctx.createMembership({
+      organization,
+      userId: targetId,
+      role: 'STAFF',
+    });
+    const site = await ctx.createSite({
+      organization,
+      name: 'Delete Target Site',
+      ownerIds: [targetId],
+      createdBy: adminUserId,
+    });
+    await ctx.assign({ organization, site, userId: targetId, membership });
+    await ctx.c.sites.updateOne(
+      { _id: site._id },
+      { $set: { teamLeadId: targetId, inspectorId: targetId } },
+    );
+    await ctx.c.invitations.insertOne({
+      _id: new ObjectId(),
+      organizationId: organization._id,
+      siteId: null,
+      email,
+      role: 'STAFF',
+      tokenHash: 'delete-target-token',
+      status: 'PENDING',
+      note: null,
+      createdBy: adminUserId,
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+      acceptedAt: null,
+      acceptedBy: null,
+    });
+    const targetAgent = await ctx.signIn(email);
+
+    const response = await mutate(admin, 'delete', `/api/v1/admin/users/${targetId}`, {
+      reason: 'offboarded after review',
+    });
+    expect(response.status).toBe(200);
+    expect(response.body.status).toBe('DELETED');
+    expect(response.body.membershipsRevoked).toBeGreaterThanOrEqual(1);
+    expect(response.body.assignmentsEnded).toBeGreaterThanOrEqual(1);
+    expect(response.body.invitationsRevoked).toBe(1);
+    expect(response.body.sitesCleared).toBe(1);
+
+    const user = await ctx.c.users.findOne({ email });
+    expect(user?.deletedAt).toBeTruthy();
+    expect(await ctx.c.memberships.countDocuments({ userId: targetId, status: 'ACTIVE' })).toBe(0);
+    expect(await ctx.c.assignments.countDocuments({ memberId: targetId, effectiveTo: null })).toBe(0);
+    expect((await targetAgent.get('/api/v1/me')).status).toBe(403);
+  });
 });

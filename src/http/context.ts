@@ -149,8 +149,11 @@ export function requireAuth(deps: AppDeps) {
           ...(ObjectId.isValid(session.user.id) ? [{ _id: new ObjectId(session.user.id) }] : []),
         ],
       },
-      { projection: { status: 1 } },
+      { projection: { status: 1, deletedAt: 1 } },
     );
+    if (userDoc?.deletedAt) {
+      throw new AppError(403, 'FORBIDDEN', 'This account was deleted. Contact an administrator.');
+    }
     if (userDoc?.status === 'DISABLED') {
       throw new AppError(403, 'FORBIDDEN', 'This account has been deactivated. Contact an administrator.');
     }

@@ -7,6 +7,7 @@ import {
   notFound,
   sitePolicySchema,
   type AdminOverview,
+  type AdminUserDeleteSummary,
   type AdminUserSummary,
   type AuditEvent,
   type Health,
@@ -50,6 +51,15 @@ import { assertRange, exportRowsForSites, mapTimesheetRows } from './owner.js';
 
 export function adminOrganizationIds(auth: AuthContext): string[] {
   return auth.actor.adminOrganizationIds;
+}
+
+function userFilter(userId: string): { $or: Array<{ _id: string | ObjectId }> } {
+  return {
+    $or: [
+      { _id: userId },
+      ...(ObjectId.isValid(userId) ? [{ _id: new ObjectId(userId) }] : []),
+    ],
+  };
 }
 
 function assertGranted(
@@ -213,7 +223,11 @@ export async function adminUsers(
       email: row.user.email,
       emailVerified: Boolean(row.user.emailVerified),
       twoFactorEnabled: Boolean(row.user.twoFactorEnabled),
-      accountStatus: row.user.status === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
+      accountStatus: row.user.deletedAt
+        ? 'DELETED'
+        : row.user.status === 'DISABLED'
+          ? 'DISABLED'
+          : 'ACTIVE',
       memberships: row.memberships.map((entry) => ({
         organizationId: entry.membership.organizationId.toHexString(),
         organizationName: entry.organization?.name ?? 'Unknown organization',
@@ -807,16 +821,11 @@ export async function reactivateUserAdmin(
   input: { reason: string },
   requestId: string,
 ) {
-  const userFilter = {
-    $or: [
-      { _id: userId },
-      ...(ObjectId.isValid(userId) ? [{ _id: new ObjectId(userId) }] : []),
-    ],
-  };
-  const user = await db.c.users.findOne({ ...userFilter, status: 'DISABLED' });
+  const filter = userFilter(userId);
+  const user = await db.c.users.findOne({ ...filter, status: 'DISABLED', deletedAt: null });
   if (!user) throw notFound('Deactivated account not found.');
   await db.c.users.updateOne(
-    { ...userFilter, status: 'DISABLED' },
+    { ...filter, status: 'DISABLED', deletedAt: null },
     { $set: { status: 'ACTIVE', disabledAt: null, disabledReason: null, updatedAt: new Date() } },
   );
   await appendAudit(db.c, {
@@ -831,6 +840,150 @@ export async function reactivateUserAdmin(
     meta: { reason: input.reason },
   });
   return { id: userId, email: user.email, status: 'ACTIVE' as const };
+}
+
+/**
+ * Platform-admin account deletion is a revocation, not a hard delete. The
+ * identity document stays so append-only attendance, reports, and audit
+ * entries remain attributable. Access, sessions, assignments, and pending
+ * invitations are removed immediately.
+ */
+export async function deleteUserAdmin(
+  db: Database,
+  auth: AuthContext,
+  userId: string,
+  input: { reason: string },
+  requestId: string,
+): Promise<AdminUserDeleteSummary> {
+  if (auth.user.id === userId) {
+    throw conflict('You cannot delete your own account.', 'FORBIDDEN');
+  }
+  const filter = userFilter(userId);
+  const user = await db.c.users.findOne({ ...filter, deletedAt: null });
+  if (!user) throw notFound('Account not found.');
+
+  const adminMembership = await db.c.memberships.findOne({
+    userId,
+    role: 'PLATFORM_ADMIN',
+    status: 'ACTIVE',
+  });
+  if (adminMembership) {
+    const otherAdmins = await db.c.memberships.countDocuments({
+      role: 'PLATFORM_ADMIN',
+      status: 'ACTIVE',
+      userId: { $ne: userId },
+    });
+    if (otherAdmins === 0) {
+      throw conflict('The last active platform administrator cannot be deleted.', 'FORBIDDEN');
+    }
+  }
+  const workingShifts = await db.c.shifts.countDocuments({ userId, status: 'WORKING' });
+  if (workingShifts > 0) {
+    throw conflict(
+      'This person is still clocked in. End their shift before deleting the account.',
+      'CONFLICT',
+    );
+  }
+
+  const now = new Date();
+  const counts: {
+    membershipsRevoked: number;
+    assignmentsEnded: number;
+    invitationsRevoked: number;
+    grantsRevoked: number;
+    sitesCleared: number;
+    devicesRevoked: number;
+    sessionsRevoked: number;
+  } = {
+    membershipsRevoked: 0,
+    assignmentsEnded: 0,
+    invitationsRevoked: 0,
+    grantsRevoked: 0,
+    sitesCleared: 0,
+    devicesRevoked: 0,
+    sessionsRevoked: 0,
+  };
+
+  await withTransaction(db, async (session) => {
+    counts.membershipsRevoked = (
+      await db.c.memberships.updateMany(
+        { userId, status: { $ne: 'REVOKED' } },
+        { $set: { status: 'REVOKED', updatedAt: now }, $inc: { version: 1 } },
+        { session },
+      )
+    ).modifiedCount;
+    counts.assignmentsEnded = (
+      await db.c.assignments.updateMany(
+        { memberId: userId, effectiveTo: null },
+        { $set: { effectiveTo: now, endedBy: auth.user.id } },
+        { session },
+      )
+    ).modifiedCount;
+    counts.sitesCleared = (
+      await db.c.sites.updateMany(
+        { $or: [{ teamLeadId: userId }, { inspectorId: userId }] },
+        { $set: { teamLeadId: null, inspectorId: null, updatedAt: now } },
+        { session },
+      )
+    ).modifiedCount;
+    counts.invitationsRevoked = (
+      await db.c.invitations.updateMany(
+        { email: user.email, status: 'PENDING' },
+        { $set: { status: 'REVOKED' } },
+        { session },
+      )
+    ).modifiedCount;
+    counts.grantsRevoked = (
+      await db.c.accessGrants.updateMany(
+        { adminUserId: userId, revokedAt: null },
+        { $set: { revokedAt: now } },
+        { session },
+      )
+    ).modifiedCount;
+    counts.devicesRevoked = (
+      await db.c.devices.updateMany(
+        { userId, revokedAt: null },
+        { $set: { revokedAt: now, pushEnabled: false, pushToken: null } },
+        { session },
+      )
+    ).modifiedCount;
+    counts.sessionsRevoked = (
+      await db.db.collection('session').deleteMany({ userId }, { session })
+    ).deletedCount;
+    const updated = await db.c.users.updateOne(
+      { ...filter, deletedAt: null },
+      {
+        $set: {
+          status: 'DISABLED',
+          disabledAt: now,
+          disabledReason: `Account deleted by ${auth.user.name}.`,
+          deletedAt: now,
+          deletedBy: auth.user.id,
+          deletedReason: input.reason,
+          updatedAt: now,
+        },
+      },
+      { session },
+    );
+    if (updated.modifiedCount !== 1) {
+      throw conflict('This account changed while it was being deleted.', 'STALE_VERSION');
+    }
+  });
+
+  await appendAudit(db.c, {
+    actorId: auth.user.id,
+    actorName: auth.user.name,
+    actorRole: auth.roles[0] ?? null,
+    action: 'user.deleted',
+    targetType: 'user',
+    targetId: userId,
+    organizationId: adminMembership?.organizationId ?? null,
+    siteId: null,
+    requestId,
+    summary: `Deleted ${user.email}. Attendance and audit history were retained.`,
+    meta: { reason: input.reason, ...counts },
+  });
+  return { id: userId, email: user.email, status: 'DELETED' as const, ...counts };
 }
 
 type AdminInviteDeps = {

@@ -442,6 +442,10 @@ export type AuthUserDoc = {
   status?: 'ACTIVE' | 'DISABLED';
   disabledAt?: Date | null;
   disabledReason?: string | null;
+  /** Set when a platform admin deletes an account. The document is retained for history. */
+  deletedAt?: Date | null;
+  deletedBy?: string | null;
+  deletedReason?: string | null;
   emailVerified: boolean;
   twoFactorEnabled?: boolean | null;
   createdAt: Date;

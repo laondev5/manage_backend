@@ -24,6 +24,7 @@ tags:
   - name: Session
   - name: Devices
   - name: Sites
+  - name: Team
   - name: Attendance
   - name: Presence
   - name: Alerts
@@ -258,8 +259,17 @@ paths:
       parameters:
         - { name: siteId, in: path, required: true, schema: { type: string } }
         - { name: assignmentId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, minLength: 5, maxLength: 300 }
       responses:
         '200': { description: Assignment ended }
+        '409': { $ref: '#/components/responses/Error' }
   /api/v1/sites/{siteId}/assignments/accept:
     post:
       tags: [Sites]
@@ -279,6 +289,33 @@ paths:
                   siteId: { type: string }
                   acceptedAt: { type: string, format: date-time }
         '404': { $ref: '#/components/responses/Error' }
+  /api/v1/team/{memberId}:
+    delete:
+      tags: [Team]
+      summary: Remove a staff member from the owner's team
+      description: >-
+        Owner-only. Revokes the organization membership, ends all active site
+        assignments, clears lead/inspector roles, and revokes pending invitations.
+        The account and attendance history remain. A member who is clocked in cannot
+        be removed until the shift ends.
+      parameters:
+        - { name: memberId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, expectedVersion]
+              properties:
+                reason: { type: string, minLength: 5, maxLength: 300 }
+                expectedVersion: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Member removed from the team
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /api/v1/sites/{siteId}/team-lead:
     post:
       tags: [Sites]
@@ -748,12 +785,64 @@ paths:
       responses:
         '201': { description: Invitation issued }
         '403': { $ref: '#/components/responses/Error' }
+  /api/v1/admin/users/{userId}:
+    delete:
+      tags: [Admin]
+      summary: Delete a user account
+      description: >-
+        Revokes every membership, assignment, grant, device, session, and pending
+        invitation. The identity document and attendance/audit history are retained
+        for attribution; the account cannot sign in and cannot be reactivated.
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 5, maxLength: 300 }
+      responses:
+        '200':
+          description: Account deleted and access revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  [id, email, status, membershipsRevoked, assignmentsEnded, invitationsRevoked, grantsRevoked, sitesCleared, devicesRevoked, sessionsRevoked]
+                properties:
+                  id: { type: string }
+                  email: { type: string }
+                  status: { type: string, enum: [DELETED] }
+                  membershipsRevoked: { type: integer }
+                  assignmentsEnded: { type: integer }
+                  invitationsRevoked: { type: integer }
+                  grantsRevoked: { type: integer }
+                  sitesCleared: { type: integer }
+                  devicesRevoked: { type: integer }
+                  sessionsRevoked: { type: integer }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /api/v1/admin/users/{userId}/reactivate:
     post:
       tags: [Admin]
-      summary: Reactivate a deactivated account
+      summary: Reactivate a deactivated (not deleted) account
+      description: Deleted accounts cannot be reactivated.
       parameters:
         - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 5, maxLength: 300 }
       responses:
         '200': { description: Account active }
         '404': { $ref: '#/components/responses/Error' }

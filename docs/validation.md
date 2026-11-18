@@ -99,3 +99,40 @@ admin/owner invitations, staff-only owner invitations, both deletion guards,
 the cascade and deactivation, blocked access for a disabled account, and
 reactivation. `pnpm lint`, `pnpm typecheck`, `pnpm test` (48), `pnpm
 test:integration` (41), and `pnpm build` with the serverless import check pass.
+
+## User deletion and owner team removal — 2026-11-18
+
+Added `DELETE /api/v1/admin/users/:userId` for platform admins and
+`DELETE /api/v1/team/:memberId` for owners. Neither is a hard delete: the
+identity document is retained so shifts, attendance events, reports, and the
+append-only audit chain stay attributable.
+
+- Admin user deletion revokes every membership and assignment, clears owner/
+  inspector references, revokes pending invitations and access grants, revokes
+  devices, deletes Better Auth sessions, and marks the account `DELETED` with
+  `status: DISABLED`. Deleted accounts cannot be reactivated. Self-deletion and
+  deletion of the last active platform administrator are blocked, as is deletion
+  while the account has a `WORKING` shift.
+- Owner team removal revokes the staff membership in the owner's organization,
+  ends its assignments, clears lead/inspector roles, and revokes pending
+  invitations. It refuses self-removal, stale versions, and members who are
+  clocked in. The account remains and can be invited again later.
+- Site-level removal uses the existing assignment endpoint with an optional
+  audited reason. It ends only that site assignment and clears that site's
+  lead/inspector references; organization membership remains. It now blocks
+  removal while the member is clocked in at that site.
+- The web console adds Delete account, Remove from site, and Remove from team
+  dialogs with reasons and reauthentication where the API requires it. The Expo
+  app adds Remove from team on the member detail screen and Remove from site on
+  the site Staff tab; both require an audited reason.
+- Reauth MFA input no longer loses focus after each digit. The shared modal
+  effect no longer depends on the inline `onClose` callback and only moves focus
+  when it is not already inside the dialog.
+
+`pnpm lint`, `pnpm typecheck`, `pnpm test` (48), `pnpm test:integration` (48
+across seven files), and `pnpm build` with the serverless import check pass.
+The integration run used the cached local MongoDB binary via
+`MONGOMS_SYSTEM_BINARY`; an uncached download attempt returned HTTP 416. Web
+and mobile lint/typecheck pass. Standalone-MongoDB residual partial-write risk
+remains the same: these cascades use `withTransaction`, which is a plain session
+on standalone.

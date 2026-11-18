@@ -137,8 +137,15 @@ export const assignmentCreateSchema = z.strictObject({
   effectiveFrom: z.iso.datetime({ offset: true }).or(z.iso.datetime()).optional(),
 });
 
+export const assignmentRemoveSchema = z.strictObject({
+  reason: z.string().trim().min(5).max(300).optional(),
+});
+
+export type AssignmentRemoveInput = z.infer<typeof assignmentRemoveSchema>;
+
 export const rosterEntrySchema = z.object({
   memberId: z.string(),
+  assignmentId: z.string(),
   name: z.string(),
   email: z.string(),
   role: roleSchema,

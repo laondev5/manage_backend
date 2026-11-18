@@ -7,9 +7,11 @@ import {
   accessGrantCreateSchema,
   adminInviteSchema,
   adminMemberInviteSchema,
+  adminUserDeleteSchema,
   adminUserReactivateSchema,
   alertReviewSchema,
   assignmentCreateSchema,
+  assignmentRemoveSchema,
   attendanceEventInputSchema,
   correctionCreateSchema,
   correctionDecisionSchema,
@@ -18,6 +20,7 @@ import {
   invitationAcceptSchema,
   isoDateTimeSchema,
   memberQuerySchema,
+  memberRemovalSchema,
   memberStatusUpdateSchema,
   membershipUpdateSchema,
   objectIdSchema,
@@ -123,6 +126,7 @@ import {
 } from '../services/sites.js';
 import {
   queryTeamMember,
+  removeTeamMember,
   setTeamMemberStatus,
   teamMemberDetail,
   teamMembers,
@@ -621,12 +625,15 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
   router.delete(
     '/sites/:siteId/assignments/:assignmentId',
     asyncHandler(async (req, res) => {
+      requireCapability(req, 'owner.team');
+      const input = parseBody(assignmentRemoveSchema, req.body ?? {});
       res.json(
         await removeAssignment(
           deps.db,
           authOf(req),
           objectId(param(req, 'siteId'), 'siteId'),
           objectId(param(req, 'assignmentId'), 'assignmentId'),
+          input,
           req.requestId,
         ),
       );
@@ -746,6 +753,17 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
       const input = parseBody(memberStatusUpdateSchema, req.body);
       res.json(
         await setTeamMemberStatus(deps.db, authOf(req), param(req, 'memberId'), input, req.requestId),
+      );
+    }),
+  );
+
+  router.delete(
+    '/team/:memberId',
+    asyncHandler(async (req, res) => {
+      requireCapability(req, 'owner.team');
+      const input = parseBody(memberRemovalSchema, req.body);
+      res.json(
+        await removeTeamMember(deps.db, authOf(req), param(req, 'memberId'), input, req.requestId),
       );
     }),
   );
@@ -1192,6 +1210,24 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
             sendMail: (message) => deps.mailer.send(message),
             inviterName: authOf(req).user.name,
           },
+          req.requestId,
+        ),
+      );
+    }),
+  );
+
+  adminRouter.delete(
+    '/users/:userId',
+    asyncHandler(async (req, res) => {
+      requireCapability(req, 'admin.users');
+      requireRecentAuth(req);
+      const input = parseBody(adminUserDeleteSchema, req.body);
+      res.json(
+        await admin.deleteUserAdmin(
+          deps.db,
+          authOf(req),
+          param(req, 'userId'),
+          input,
           req.requestId,
         ),
       );

@@ -6,6 +6,7 @@ import {
   forbidden,
   notFound,
   sitePolicySchema,
+  type AssignmentRemoveInput,
   type InvitationSummary,
   type RosterEntry,
   type SiteCreateInput,
@@ -339,6 +340,7 @@ export async function siteRoster(
   const roster = await listRoster(db.c, site._id);
   return roster.map((entry) => ({
     memberId: entry.assignment.memberId,
+    assignmentId: entry.assignment._id.toHexString(),
     name: entry.name,
     email: entry.email,
     role: entry.membership?.role ?? 'STAFF',
@@ -405,11 +407,20 @@ export async function removeAssignment(
   auth: AuthContext,
   siteId: ObjectId,
   assignmentId: ObjectId,
+  input: AssignmentRemoveInput,
   requestId: string,
 ) {
   const site = await managedSite(db, auth, siteId);
   const assignment = await db.c.assignments.findOne({ _id: assignmentId, siteId: site._id });
   if (!assignment) throw notFound('Assignment not found.');
+  const working = await db.c.shifts.countDocuments({
+    siteId: site._id,
+    userId: assignment.memberId,
+    status: 'WORKING',
+  });
+  if (working > 0) {
+    throw conflict('This member is still clocked in at this site. End the shift before removing them.');
+  }
   const ended = await endAssignment(db.c, assignment._id, auth.user.id);
   if (!ended) throw conflict('This assignment was already ended.');
   if (site.teamLeadId === assignment.memberId) {
@@ -434,8 +445,8 @@ export async function removeAssignment(
     organizationId: site.organizationId,
     siteId: site._id,
     requestId,
-    summary: 'Ended a staff assignment at the site.',
-    meta: { memberId: assignment.memberId },
+    summary: 'Removed a staff member from the site roster.',
+    meta: { memberId: assignment.memberId, reason: input.reason ?? 'Removed from site.' },
   });
   return { ok: true as const };
 }

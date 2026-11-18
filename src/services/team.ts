@@ -4,6 +4,8 @@ import {
   forbidden,
   notFound,
   type MemberQueryInput,
+  type MemberRemoval,
+  type MemberRemovalSummary,
   type MemberStatusUpdate,
   type TeamMemberDetail,
   type TeamMemberSummary,
@@ -16,6 +18,7 @@ import {
   type MembershipDoc,
   type ShiftDoc,
   type SiteDoc,
+  withTransaction,
 } from '../database/index.js';
 import type { AuthContext } from '../http/context.js';
 
@@ -328,6 +331,96 @@ export async function setTeamMemberStatus(
     },
   });
   return teamMemberDetail(db, auth, memberId);
+}
+
+/**
+ * Owners can remove a staff member from their whole team. The account and
+ * attendance history remain, but every membership and assignment in the
+ * owner's organization ends immediately.
+ */
+export async function removeTeamMember(
+  db: Database,
+  auth: AuthContext,
+  memberId: string,
+  input: MemberRemoval,
+  requestId: string,
+): Promise<MemberRemovalSummary> {
+  const membership = await ownedMembership(db, auth, memberId);
+  if (membership.userId === auth.user.id) {
+    throw conflict('You cannot remove yourself from the team here.');
+  }
+  if (membership.version !== input.expectedVersion) {
+    throw conflict('This member changed since you loaded the page. Refresh and try again.', 'STALE_VERSION');
+  }
+  const working = await db.c.shifts.countDocuments({ userId: memberId, status: 'WORKING' });
+  if (working > 0) {
+    throw conflict('This member is still clocked in. End the shift before removing them.');
+  }
+  const user = (await usersByIds(db.c, [memberId])).get(memberId);
+  const now = new Date();
+  const counts = {
+    membershipsRevoked: 0,
+    assignmentsEnded: 0,
+    invitationsRevoked: 0,
+    sitesCleared: 0,
+  };
+
+  await withTransaction(db, async (session) => {
+    const removed = await db.c.memberships.findOneAndUpdate(
+      {
+        _id: membership._id,
+        version: input.expectedVersion,
+        status: { $ne: 'REVOKED' },
+      },
+      { $set: { status: 'REVOKED', updatedAt: now }, $inc: { version: 1 } },
+      { session, returnDocument: 'after' },
+    );
+    if (!removed) {
+      throw conflict('This member changed while they were being removed.', 'STALE_VERSION');
+    }
+    counts.membershipsRevoked = 1;
+    counts.assignmentsEnded = (
+      await db.c.assignments.updateMany(
+        { memberId, organizationId: membership.organizationId, effectiveTo: null },
+        { $set: { effectiveTo: now, endedBy: auth.user.id } },
+        { session },
+      )
+    ).modifiedCount;
+    counts.sitesCleared = (
+      await db.c.sites.updateMany(
+        {
+          organizationId: membership.organizationId,
+          $or: [{ teamLeadId: memberId }, { inspectorId: memberId }],
+        },
+        { $set: { teamLeadId: null, inspectorId: null, updatedAt: now } },
+        { session },
+      )
+    ).modifiedCount;
+    if (user?.email) {
+      counts.invitationsRevoked = (
+        await db.c.invitations.updateMany(
+          { organizationId: membership.organizationId, email: user.email, status: 'PENDING' },
+          { $set: { status: 'REVOKED' } },
+          { session },
+        )
+      ).modifiedCount;
+    }
+  });
+
+  await appendAudit(db.c, {
+    actorId: auth.user.id,
+    actorName: auth.user.name,
+    actorRole: auth.roles[0] ?? null,
+    action: 'member.removed',
+    targetType: 'member',
+    targetId: memberId,
+    organizationId: membership.organizationId,
+    siteId: null,
+    requestId,
+    summary: `Removed a team member. Reason: ${input.reason}`,
+    meta: { reason: input.reason, membershipId: membership._id.toHexString(), ...counts },
+  });
+  return { id: memberId, organizationId: membership.organizationId.toHexString(), ...counts };
 }
 
 export async function queryTeamMember(

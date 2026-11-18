@@ -284,8 +284,25 @@ export class ApiClient {
     }>(`/api/v1/sites/${siteId}/assignments`, input);
   }
 
-  removeAssignment(siteId: string, assignmentId: string) {
-    return this.delete<{ ok: true }>(`/api/v1/sites/${siteId}/assignments/${assignmentId}`);
+  removeAssignment(siteId: string, assignmentId: string, reason?: string) {
+    return this.delete<{ ok: true }>(
+      `/api/v1/sites/${siteId}/assignments/${assignmentId}`,
+      reason ? { body: { reason } } : undefined,
+    );
+  }
+
+  removeTeamMember(
+    memberId: string,
+    input: { reason: string; expectedVersion: number },
+  ) {
+    return this.delete<{
+      id: string;
+      organizationId: string;
+      membershipsRevoked: number;
+      assignmentsEnded: number;
+      invitationsRevoked: number;
+      sitesCleared: number;
+    }>(`/api/v1/team/${encodeURIComponent(memberId)}`, { body: input });
   }
 
   acceptAssignment(siteId: string) {
