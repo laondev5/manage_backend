@@ -133,6 +133,8 @@ append-only audit chain stay attributable.
 across seven files), and `pnpm build` with the serverless import check pass.
 The integration run used the cached local MongoDB binary via
 `MONGOMS_SYSTEM_BINARY`; an uncached download attempt returned HTTP 416. Web
-and mobile lint/typecheck pass. Standalone-MongoDB residual partial-write risk
-remains the same: these cascades use `withTransaction`, which is a plain session
-on standalone.
+and mobile lint/typecheck pass. A web `next build` retry was blocked by the
+sandbox bulk-delete guard while cleaning `.next/trace-build`, so the production
+web bundle remains unverified in this environment. Standalone-MongoDB residual
+partial-write risk remains the same: these cascades use `withTransaction`, which
+is a plain session on standalone.
