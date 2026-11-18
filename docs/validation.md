@@ -1,5 +1,18 @@
 # Standalone backend validation — 2026-11-18
 
+## Serverless bundle regression
+
+After the rich-text report update, direct import of the generated ESM bundle
+failed with `Dynamic require of "tty" is not supported`. The Node-only
+serverless build now supplies `createRequire(import.meta.url)` for bundled
+CommonJS dependencies. Report sanitization remains enabled and unchanged.
+`pnpm build` now imports the actual generated bundle through
+`scripts/check-serverless.mjs`, so this startup failure fails the build instead
+of reaching deployment. Importing only the lazy `server.js` wrapper did not
+exercise this failure.
+
+## Extraction checks
+
 Passed locally after extraction from the workspace:
 
 - `pnpm install --frozen-lockfile`

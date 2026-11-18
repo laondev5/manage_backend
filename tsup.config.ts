@@ -28,5 +28,9 @@ export default defineConfig([
     entry: { serverless: 'src/app.ts' },
     clean: false,
     noExternal: [/.*/],
+    // Bundled CommonJS dependencies still require Node built-ins at runtime.
+    banner: {
+      js: "import { createRequire as createNodeRequire } from 'node:module'; const require = createNodeRequire(import.meta.url);",
+    },
   },
 ]);
