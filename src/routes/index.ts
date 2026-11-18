@@ -231,7 +231,12 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
       let created;
       try {
         created = await deps.auth.api.signUpEmail({
-          body: { email: invitation.email, password: input.password, name: input.name },
+          body: {
+            email: invitation.email,
+            password: input.password,
+            name: input.name,
+            callbackURL: `${deps.env.trustedWebOrigins[0] ?? 'http://localhost:3000'}/sign-in`,
+          },
         });
       } catch {
         throw new AppError(

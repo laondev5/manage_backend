@@ -704,7 +704,7 @@ export async function inviteStaff(
     createdBy: auth.user.id,
     expiresAt,
   });
-  const url = `${context.webUrl}/invite?token=${encodeURIComponent(token)}`;
+  const url = `${context.webUrl}/invite/${encodeURIComponent(token)}`;
   const message = invitationEmail(site.name, context.inviterName, url);
   await context.sendMail({
     to: input.email,
@@ -785,7 +785,7 @@ export async function inviteTeamMember(
     createdBy: auth.user.id,
     expiresAt,
   });
-  const url = `${context.webUrl}/invite?token=${encodeURIComponent(token)}`;
+  const url = `${context.webUrl}/invite/${encodeURIComponent(token)}`;
   const message = site
     ? invitationEmail(site.name, context.inviterName, url)
     : teamInvitationEmail(organization.name, context.inviterName, url);
