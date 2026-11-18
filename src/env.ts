@@ -42,6 +42,17 @@ export type Env = z.infer<typeof envSchema> & {
   pushProvider: 'expo' | 'local';
 };
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+function isLoopbackOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const parsed = envSchema.safeParse(source);
   if (!parsed.success) {
@@ -83,7 +94,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       throw new Error('AUTH_BASE_URL must use HTTPS in production.');
     }
     for (const origin of trustedWebOrigins) {
-      if (!origin.startsWith('https://')) {
+      // Loopback origins never leave the machine, so a local console may talk
+      // to a hosted API over HTTP; every other origin must use HTTPS.
+      if (!origin.startsWith('https://') && !isLoopbackOrigin(origin)) {
         throw new Error(`Trusted web origin must use HTTPS in production: ${origin}`);
       }
     }
