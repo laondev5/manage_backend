@@ -164,7 +164,7 @@ export async function updateOnboardingStep(
   if (!membership) throw notFound('Membership not found.');
   const staffSteps: OnboardingStep[] = ['detailsConfirmed', 'siteReviewed', 'readinessCompleted'];
   const ownerSteps: OnboardingStep[] = ['siteDetailsDone', 'boundaryDone', 'inviteDone', 'alertsReviewed'];
-  const relevant = membership.role === 'STAFF' ? staffSteps : ownerSteps;
+  const relevant = ['STAFF', 'SUPERVISOR'].includes(membership.role) ? staffSteps : ownerSteps;
   const merged = { ...membership.onboarding, [input.step]: input.value };
   const complete = relevant.every((step) => merged[step]);
   await c.memberships.updateOne(
@@ -227,7 +227,7 @@ export async function listAdminUsers(c: Collections, limit = 200) {
 export async function updateMembership(
   c: Collections,
   membershipId: ObjectId,
-  changes: { status?: MembershipDoc['status']; role?: 'STAFF' | 'SITE_OWNER' },
+  changes: { status?: MembershipDoc['status']; role?: MembershipDoc['role'] },
 ): Promise<MembershipDoc | null> {
   const result = await c.memberships.findOneAndUpdate(
     { _id: membershipId },

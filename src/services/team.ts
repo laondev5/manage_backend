@@ -42,7 +42,7 @@ async function ownedMembership(
   const membership = await db.c.memberships.findOne({
     userId: memberId,
     organizationId: { $in: orgIds },
-    role: 'STAFF',
+    role: { $in: ['STAFF', 'SUPERVISOR'] },
     status: { $in: ['ACTIVE', 'SUSPENDED'] },
   });
   if (!membership) throw notFound('Member not found.');
@@ -55,6 +55,7 @@ const activeAssignments = (now: Date) => ({
 });
 
 type MemberSiteRow = {
+  assignmentId: string,
   id: string;
   name: string;
   presence: TeamMemberSummary['sites'][number]['presence'];
@@ -93,6 +94,7 @@ async function memberSiteRows(
     const shift = shiftByKey.get(`${assignment.memberId}:${site._id.toHexString()}`) ?? null;
     const rows = result.get(assignment.memberId) ?? [];
     rows.push({
+      assignmentId: assignment._id.toHexString(),
       id: site._id.toHexString(),
       name: site.name,
       presence: shift ? shift.presence.state : 'NOT_WORKING',
@@ -114,7 +116,7 @@ export async function teamMembers(db: Database, auth: AuthContext): Promise<Team
   const orgIds = auth.actor.ownedOrganizationIds.map((id) => new ObjectId(id));
   if (!orgIds.length) return [];
   const memberships = await db.c.memberships
-    .find({ organizationId: { $in: orgIds }, role: 'STAFF', status: { $in: ['ACTIVE', 'SUSPENDED'] } })
+    .find({ organizationId: { $in: orgIds }, role: { $in: ['STAFF', 'SUPERVISOR'] }, status: { $in: ['ACTIVE', 'SUSPENDED'] } })
     .sort({ createdAt: 1 })
     .limit(500)
     .toArray();
@@ -138,6 +140,8 @@ export async function teamMembers(db: Database, auth: AuthContext): Promise<Team
       name: user?.name ?? 'Team member',
       email: user?.email ?? '',
       role: membership.role,
+      phone: user?.phone ?? '',
+      canUpdateSiteLocation: membership.canUpdateSiteLocation ?? false,
       title: membership.title,
       status: membership.status,
       membershipId: membership._id.toHexString(),
@@ -234,6 +238,8 @@ export async function teamMemberDetail(
       name: user?.name ?? 'Team member',
       email: user?.email ?? '',
       role: membership.role,
+      phone: user?.phone ?? '',
+      canUpdateSiteLocation: membership.canUpdateSiteLocation ?? false,
       title: membership.title,
       status: membership.status,
       membershipId: membership._id.toHexString(),
@@ -241,6 +247,7 @@ export async function teamMemberDetail(
       joinedAt: membership.createdAt.toISOString(),
     },
     sites: rows.map((site) => ({
+      assignmentId: site.assignmentId,
       id: site.id,
       name: site.name,
       presence: site.presence,
@@ -460,4 +467,28 @@ export async function queryTeamMember(
     message: input.message,
     byName: auth.user.name,
   };
+}
+
+export async function updateStaffProfile(db: Database, auth: AuthContext, memberId: string,
+  input: import('../contracts/accounts.js').StaffProfileUpdate, requestId: string) {
+  const membership = await ownedMembership(db, auth, memberId);
+  if (memberId === auth.user.id) throw forbidden('You cannot change your own role here.');
+  await withTransaction(db, async (session) => {
+    const changed = await db.c.memberships.updateOne({ _id: membership._id, version: input.expectedVersion }, {
+      $set: { role: input.role, canUpdateSiteLocation: input.role === 'SUPERVISOR' && input.canUpdateSiteLocation, updatedAt: new Date() },
+      $inc: { version: 1 },
+    }, { session });
+    if (!changed.matchedCount) throw conflict('Refresh this member and try again.', 'STALE_VERSION');
+    const user = (await usersByIds(db.c, [memberId])).get(memberId);
+    if (!user) throw notFound('Member not found.');
+    const changedEmail = input.email !== undefined && input.email !== user.email;
+    if (changedEmail && await db.c.users.findOne({ email: input.email }, { session })) throw conflict('Email is already in use.');
+    await db.c.users.updateOne({ _id: user._id }, { $set: { name: input.name, phone: input.phone, updatedAt: new Date(), ...(changedEmail ? { email: input.email!, emailVerified: false } : {}) } }, { session });
+    if (changedEmail) await db.db.collection('session').deleteMany({ userId: memberId }, { session });
+  });
+  await appendAudit(db.c, { actorId: auth.user.id, actorName: auth.user.name, actorRole: auth.roles[0] ?? null,
+    action: 'member.updated', targetType: 'member', targetId: memberId, organizationId: membership.organizationId,
+    siteId: null, requestId, summary: 'Updated staff profile and supervisor permissions.',
+    meta: { role: input.role, canUpdateSiteLocation: input.canUpdateSiteLocation } });
+  return teamMemberDetail(db, auth, memberId);
 }

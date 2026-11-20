@@ -55,6 +55,7 @@ export const accessGrantSummarySchema = z.object({
 });
 
 export const adminUserSummarySchema = z.object({
+  phone: z.string().optional(),
   id: z.string(),
   name: z.string(),
   email: z.string(),
@@ -63,6 +64,7 @@ export const adminUserSummarySchema = z.object({
   accountStatus: z.enum(['ACTIVE', 'DISABLED', 'DELETED']),
   memberships: z.array(
     z.object({
+      id: z.string().optional(),
       organizationId: z.string(),
       organizationName: z.string(),
       role: roleSchema,
@@ -77,7 +79,7 @@ export type AdminUserSummary = z.infer<typeof adminUserSummarySchema>;
 
 export const membershipUpdateSchema = z.strictObject({
   status: z.enum(['ACTIVE', 'SUSPENDED', 'REVOKED']).optional(),
-  role: z.enum(['STAFF', 'SITE_OWNER']).optional(),
+  role: roleSchema.optional(),
   reason: z.string().trim().min(5).max(300),
 });
 

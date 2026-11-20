@@ -103,6 +103,7 @@ export function siteToSummary(
   extras?: SiteSummaryExtras,
 ): SiteSummary {
   return {
+    policy: site.policy,
     id: site._id.toHexString(),
     organizationId: site.organizationId.toHexString(),
     name: site.name,

@@ -85,13 +85,12 @@ describe('attendance integrity', () => {
     expect(await ctx.c.shifts.countDocuments({ userId: staffId, status: 'WORKING' })).toBe(1);
   });
 
-  it('records a clock-in without location as needing review', async () => {
+  it('rejects a clock-in without location without creating a shift', async () => {
     const response = await postEvent(eventBody({ location: null }));
     expect(response.status).toBe(200);
-    expect(response.body.outcome).toBe('NEEDS_REVIEW');
+    expect(response.body.outcome).toBe('REJECTED');
     const shift = await ctx.c.shifts.findOne({ userId: staffId });
-    expect(shift?.reviewState).toBe('NEEDS_REVIEW');
-    expect(shift?.presence.state).toBe('UNKNOWN');
+    expect(shift).toBeNull();
   });
 
   it('clocks out the active shift and then allows a new clock-in', async () => {

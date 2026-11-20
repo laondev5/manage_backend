@@ -20,6 +20,7 @@ const ADMIN_CAPABILITIES: Capability[] = [
 
 export const roleCapabilities = (role: Role): Capability[] => {
   switch (role) {
+    case 'SUPERVISOR':
     case 'STAFF':
       return [...STAFF_CAPABILITIES];
     case 'SITE_OWNER':
@@ -62,6 +63,7 @@ export type ScopedActor = {
 
 export function canReadSite(actor: ScopedActor, site: { organizationId: string; id: string }) {
   return (
+    actor.capabilities.includes('admin.sites') ||
     actor.ownedSiteIds.includes(site.id) ||
     actor.adminOrganizationIds.includes(site.organizationId) ||
     actor.assignedSiteIds.includes(site.id)
@@ -69,7 +71,7 @@ export function canReadSite(actor: ScopedActor, site: { organizationId: string; 
 }
 
 export function canManageSite(actor: ScopedActor, site: { organizationId: string; id: string }) {
-  if (actor.ownedSiteIds.includes(site.id)) return true;
+  if (actor.capabilities.includes('admin.sites') || actor.ownedSiteIds.includes(site.id)) return true;
   return (
     actor.adminOrganizationIds.includes(site.organizationId) &&
     actor.capabilities.includes('admin.sites')
@@ -78,6 +80,13 @@ export function canManageSite(actor: ScopedActor, site: { organizationId: string
 
 export function canClockIn(actor: ScopedActor, siteId: string) {
   return actor.assignedSiteIds.includes(siteId) && actor.capabilities.includes('staff.clock');
+}
+
+export function canUpdateSupervisorLocation(input: {
+  role: Role; active: boolean; permitted: boolean; assigned: boolean;
+}, changedFields: string[]) {
+  return input.role === 'SUPERVISOR' && input.active && input.permitted && input.assigned &&
+    changedFields.every((key) => ['latitude', 'longitude', 'version'].includes(key));
 }
 
 export function canReviewCorrections(

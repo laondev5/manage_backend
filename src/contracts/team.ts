@@ -36,6 +36,7 @@ export const memberQuerySchema = z.strictObject({
 export type MemberQueryInput = z.infer<typeof memberQuerySchema>;
 
 export const teamMemberSiteSchema = z.object({
+  assignmentId: z.string(),
   id: z.string(),
   name: z.string(),
   presence: z.enum(['UNKNOWN', 'INSIDE', 'EXIT_PENDING', 'OUTSIDE', 'NOT_WORKING']),
@@ -76,6 +77,8 @@ export const teamMemberSummarySchema = z.object({
   name: z.string(),
   email: z.string(),
   role: roleSchema,
+  phone: z.string().optional(),
+  canUpdateSiteLocation: z.boolean().optional(),
   title: z.string().nullable(),
   status: z.enum(['ACTIVE', 'SUSPENDED', 'REVOKED']),
   membershipId: z.string(),
@@ -100,6 +103,8 @@ export const teamMemberDetailSchema = z.object({
     name: z.string(),
     email: z.string(),
     role: roleSchema,
+  phone: z.string().optional(),
+  canUpdateSiteLocation: z.boolean().optional(),
     title: z.string().nullable(),
     status: z.enum(['ACTIVE', 'SUSPENDED', 'REVOKED']),
     membershipId: z.string(),

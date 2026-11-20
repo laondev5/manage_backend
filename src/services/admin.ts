@@ -220,6 +220,7 @@ export async function adminUsers(
     .map((row) => ({
       id: row.userId,
       name: row.user.name,
+      phone: row.user.phone ?? '',
       email: row.user.email,
       emailVerified: Boolean(row.user.emailVerified),
       twoFactorEnabled: Boolean(row.user.twoFactorEnabled),
@@ -229,6 +230,7 @@ export async function adminUsers(
           ? 'DISABLED'
           : 'ACTIVE',
       memberships: row.memberships.map((entry) => ({
+        id: entry.membership._id.toHexString(),
         organizationId: entry.membership.organizationId.toHexString(),
         organizationName: entry.organization?.name ?? 'Unknown organization',
         role: entry.membership.role,
@@ -243,12 +245,13 @@ export async function updateMembershipAdmin(
   db: Database,
   auth: AuthContext,
   membershipId: ObjectId,
-  input: { status?: MembershipDoc['status']; role?: 'STAFF' | 'SITE_OWNER'; reason: string },
+  input: { status?: MembershipDoc['status']; role?: MembershipDoc['role']; reason: string },
   requestId: string,
 ) {
   const membership = await db.c.memberships.findOne({ _id: membershipId });
   if (!membership) throw notFound('Membership not found.');
-  if (membership.role === 'PLATFORM_ADMIN' && input.status && input.status !== 'ACTIVE') {
+  if (membership.userId === auth.user.id && ((input.role && input.role !== membership.role) || (input.status && input.status !== 'ACTIVE'))) throw forbidden('You cannot remove your own administrator access.');
+  if (membership.role === 'PLATFORM_ADMIN' && ((input.status && input.status !== 'ACTIVE') || (input.role && input.role !== 'PLATFORM_ADMIN'))) {
     const activeAdmins = await db.c.memberships.countDocuments({
       role: 'PLATFORM_ADMIN',
       status: 'ACTIVE',

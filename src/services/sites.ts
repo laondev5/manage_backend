@@ -14,7 +14,7 @@ import {
   type SiteSummary,
   type SiteUpdateInput,
 } from '../contracts/index.js';
-import { canManageSite, canReadSite } from '../domain/index.js';
+import { canManageSite, canReadSite, canUpdateSupervisorLocation } from '../domain/index.js';
 import {
   acceptAssignment,
   appendAudit,
@@ -64,7 +64,9 @@ export async function listSites(
   auth: AuthContext,
   scope: 'current' | 'previous' = 'current',
 ): Promise<SiteSummary[]> {
-  const sites = await listSitesScoped(db.c, {
+  const sites = auth.capabilities.includes('admin.sites')
+    ? await db.c.sites.find({ deletedAt: null, ...(scope === 'previous' ? { $or: [{ archivedAt: { $ne: null } }, { status: 'INACTIVE' }] } : { archivedAt: null }) }).sort({ name: 1 }).toArray()
+    : await listSitesScoped(db.c, {
     userId: auth.user.id,
     ownedSiteIds: auth.actor.ownedSiteIds,
     assignedSiteIds: auth.actor.assignedSiteIds,
@@ -122,13 +124,19 @@ export async function getSite(
   const assignment = isAssigned
     ? await findActiveAssignment(db.c, site._id, auth.user.id)
     : null;
-  return siteToDetail(site, {
+  const result = siteToDetail(site, {
     teamLeadName: site.teamLeadId ? (users?.get(site.teamLeadId)?.name ?? null) : null,
     inspectorName: site.inspectorId ? (users?.get(site.inspectorId)?.name ?? null) : null,
     ...(isAssigned
       ? { assignmentAcceptedAt: assignment?.acceptedAt?.toISOString() ?? null }
       : {}),
   });
+  const membership = auth.context.memberships.find((entry) => entry.organization._id.equals(site.organizationId));
+  result.canUpdateLocation = Boolean(membership && canUpdateSupervisorLocation({
+    role: membership.membership.role, active: membership.membership.status === 'ACTIVE' && membership.organization.status === 'ACTIVE',
+    permitted: membership.membership.canUpdateSiteLocation === true, assigned: isAssigned,
+  }, ['latitude', 'longitude', 'version']));
+  return result;
 }
 
 export async function createOwnerSite(
@@ -137,12 +145,14 @@ export async function createOwnerSite(
   input: SiteCreateInput,
   requestId: string,
 ): Promise<SiteDetail> {
-  if (!auth.actor.ownedOrganizationIds.includes(input.organizationId)) {
+  if (!auth.roles.includes('PLATFORM_ADMIN') && !auth.actor.ownedOrganizationIds.includes(input.organizationId)) {
     throw forbidden('You can only create sites for an organization you own.');
   }
-  if (!auth.capabilities.includes('owner.sites')) {
+  if (!auth.capabilities.includes('owner.sites') && !auth.capabilities.includes('admin.sites')) {
     throw forbidden('Site management is not available for this account.');
   }
+  const organization = await db.c.organizations.findOne({ _id: new ObjectId(input.organizationId), status: 'ACTIVE', deletedAt: null });
+  if (!organization) throw notFound('Organization not found.');
   const site = await createSite(db.c, {
     organizationId: new ObjectId(input.organizationId),
     name: input.name,
@@ -184,9 +194,16 @@ export async function updateOwnerSite(
   requestId: string,
 ): Promise<SiteDetail> {
   const site = await findSite(db.c, siteId);
-  if (!site) throw notFound('Site not found.');
+  if (!site || site.deletedAt) throw notFound('Site not found.');
+  const membership = auth.context.memberships.find((entry) => entry.organization._id.equals(site.organizationId));
+  const supervisorAllowed = membership && canUpdateSupervisorLocation({
+    role: membership.membership.role,
+    active: membership.membership.status === 'ACTIVE' && membership.organization.status === 'ACTIVE',
+    permitted: membership.membership.canUpdateSiteLocation === true,
+    assigned: auth.actor.assignedSiteIds.includes(site._id.toHexString()),
+  }, Object.keys(input));
   if (
-    !canManageSite(auth.actor, {
+    !supervisorAllowed && !canManageSite(auth.actor, {
       organizationId: site.organizationId.toHexString(),
       id: site._id.toHexString(),
     })
@@ -364,7 +381,7 @@ export async function addAssignment(
 ) {
   const site = await managedSite(db, auth, siteId);
   const membership = await findActiveMembership(db.c, site.organizationId, input.memberId);
-  if (!membership || membership.role !== 'STAFF') {
+  if (!membership || !['STAFF', 'SUPERVISOR'].includes(membership.role)) {
     throw new AppError(422, 'VALIDATION_ERROR', 'Choose an active staff member in this organization.', {
       memberId: ['The member is not active staff in this organization.'],
     });
@@ -497,7 +514,7 @@ export async function setSiteTeamLead(
   requestId: string,
 ): Promise<{ siteId: string; teamLeadId: string | null; teamLeadName: string | null }> {
   const site = await managedSite(db, auth, siteId);
-  if (!auth.capabilities.includes('owner.sites')) {
+  if (!auth.capabilities.includes('owner.sites') && !auth.capabilities.includes('admin.sites')) {
     throw forbidden('Site management is not available for this account.');
   }
   const now = new Date();
@@ -523,7 +540,7 @@ export async function setSiteTeamLead(
   }
 
   const membership = await findActiveMembership(db.c, site.organizationId, input.memberId);
-  if (!membership || membership.role !== 'STAFF') {
+  if (!membership || !['STAFF', 'SUPERVISOR'].includes(membership.role)) {
     throw new AppError(422, 'VALIDATION_ERROR', 'Choose an active staff member in this organization.', {
       memberId: ['The member is not active staff in this organization.'],
     });
@@ -564,7 +581,7 @@ export async function setSiteInspector(
   requestId: string,
 ): Promise<{ siteId: string; inspectorId: string | null; inspectorName: string | null; inspectingSelf: boolean }> {
   const site = await managedSite(db, auth, siteId);
-  if (!auth.capabilities.includes('owner.sites')) {
+  if (!auth.capabilities.includes('owner.sites') && !auth.capabilities.includes('admin.sites')) {
     throw forbidden('Site management is not available for this account.');
   }
   const now = new Date();
@@ -597,7 +614,7 @@ export async function setSiteInspector(
   const inspectingSelf = input.inspectorId === auth.user.id;
   if (!inspectingSelf) {
     const membership = await findActiveMembership(db.c, site.organizationId, input.inspectorId);
-    if (!membership || membership.role !== 'STAFF') {
+    if (!membership || !['STAFF', 'SUPERVISOR'].includes(membership.role)) {
       throw new AppError(422, 'VALIDATION_ERROR', 'Choose an active staff member in this organization.', {
         inspectorId: ['The inspector is not active staff in this organization.'],
       });
@@ -996,7 +1013,7 @@ export async function staffAssignedSites(db: Database, auth: AuthContext) {
 
 export async function orgMemberLookup(db: Database, organizationId: ObjectId, query: string) {
   const memberships = await db.c.memberships
-    .find({ organizationId, role: 'STAFF', status: 'ACTIVE' })
+    .find({ organizationId, role: { $in: ['STAFF', 'SUPERVISOR'] }, status: 'ACTIVE' })
     .limit(100)
     .toArray();
   const users = await usersByIds(db.c, memberships.map((membership) => membership.userId));

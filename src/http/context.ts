@@ -92,7 +92,7 @@ function buildActor(context: UserContextRecord, capabilities: Capability[]): Sco
   const staffOrgs = [
     ...new Set(
       activeMemberships
-        .filter((entry) => entry.membership.role === 'STAFF')
+        .filter((entry) => ['STAFF', 'SUPERVISOR'].includes(entry.membership.role))
         .map((entry) => entry.organization._id.toHexString()),
     ),
   ];
@@ -141,6 +141,9 @@ export function requireAuth(deps: AppDeps) {
     if (!session) throw new AppError(401, 'UNAUTHENTICATED', 'Sign in to continue.');
 
     const context = await getUserContext(deps.db.c, session.user.id);
+    if (context.user.mustChangePassword && !['/me', '/csrf', '/me/initial-password'].includes(req.path)) {
+      throw new AppError(403, 'FORBIDDEN', 'Change your temporary password before using Manage.');
+    }
     // Disabled accounts are re-gated on every request, not only at sign-in.
     const userDoc = await deps.db.c.users.findOne(
       {

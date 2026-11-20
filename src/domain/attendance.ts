@@ -55,16 +55,16 @@ export function decideClockIn(context: ClockInContext): ClockInDecision {
   }
   if (skewMs < -24 * 60 * 60 * 1000) {
     return {
-      outcome: 'NEEDS_REVIEW',
-      reviewReason: 'The clock-in was captured more than 24 hours ago and needs review.',
+      outcome: 'REJECTED',
+      reviewReason: 'This clock-in is too old. Obtain a new location reading at the site.',
       distanceMeters: null,
       classification: 'NO_LOCATION',
     };
   }
   if (!context.location) {
     return {
-      outcome: 'NEEDS_REVIEW',
-      reviewReason: 'No location was available. The clock-in is recorded for review.',
+      outcome: 'REJECTED',
+      reviewReason: 'A location reading inside the site is required to clock in.',
       distanceMeters: null,
       classification: 'NO_LOCATION',
     };
@@ -84,10 +84,10 @@ export function decideClockIn(context: ClockInContext): ClockInDecision {
     };
   }
   return {
-    outcome: 'NEEDS_REVIEW',
+    outcome: 'REJECTED',
     reviewReason:
       classified.reason ??
-      'The clock-in location is outside the site boundary; it is recorded as a reviewable exception.',
+      'You are outside the site boundary. Move inside the site before clocking in.',
     distanceMeters: classified.distanceMeters,
     classification: classified.classification,
   };

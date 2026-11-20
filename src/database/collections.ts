@@ -42,6 +42,8 @@ export type OnboardingDoc = {
 };
 
 export type MembershipDoc = {
+  /** Explicit coordinate-edit permission; only effective for a supervisor. */
+  canUpdateSiteLocation?: boolean;
   _id: ObjectId;
   organizationId: ObjectId;
   userId: string;
@@ -434,6 +436,11 @@ export type ExportDoc = {
 };
 
 export type AuthUserDoc = {
+  mustChangePassword?: boolean;
+  temporaryPasswordExpiresAt?: Date | null;
+  initialPasswordChanging?: boolean;
+  temporaryPasswordUsedAt?: Date | null;
+  phone?: string;
   _id: ObjectId | string;
   id?: string;
   name: string;

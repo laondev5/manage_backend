@@ -1,3 +1,8 @@
+import { fromNodeHeaders } from 'better-auth/node';
+import { activityHistory } from '../services/activity.js';
+import { createAccount, updateAccountProfile } from '../services/accounts.js';
+import { accountCreateSchema, staffProfileUpdateSchema, accountProfileSchema, initialPasswordSchema } from '../contracts/accounts.js';
+import { updateStaffProfile } from '../services/team.js';
 import { Router, type Request } from 'express';
 import type { Logger } from 'pino';
 import { ObjectId } from 'mongodb';
@@ -280,6 +285,25 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
   router.use(requireVerifiedEmail);
 
   router.get('/csrf', csrfRoute(deps.env));
+  router.post('/me/initial-password', limiter(deps, { windowMs: 60000, limit: 5, prefix: 'initial-password:', key: userOrIp }), asyncHandler(async (req, res) => {
+    const auth = authOf(req);
+    const input = parseBody(initialPasswordSchema, req.body);
+    const user = auth.context.user;
+    const claimed = await deps.db.c.users.findOneAndUpdate({ _id: user._id, mustChangePassword: true,
+      initialPasswordChanging: { $ne: true }, temporaryPasswordExpiresAt: { $gt: new Date() },
+    }, { $set: { initialPasswordChanging: true } });
+    if (!claimed) throw new AppError(409, 'CONFLICT', 'Temporary password expired or already used. Use Forgot password if needed.');
+    try {
+      await deps.auth.api.changePassword({ headers: fromNodeHeaders(req.headers), body: { ...input, revokeOtherSessions: false } });
+      await deps.db.c.users.updateOne({ _id: user._id }, { $set: { mustChangePassword: false, initialPasswordChanging: false, temporaryPasswordExpiresAt: null } });
+      await deps.db.db.collection('session').deleteMany({ userId: auth.user.id, token: { $ne: (await deps.auth.api.getSession({ headers: fromNodeHeaders(req.headers) }))?.session.token } });
+      res.json({ ok: true });
+    } catch (error) {
+      await deps.db.c.users.updateOne({ _id: user._id }, { $set: { initialPasswordChanging: false } });
+      throw error;
+    }
+  }));
+
 
   router.get(
     '/me',
@@ -369,6 +393,22 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
   );
 
   router.use(mfaGate);
+  router.get('/activity', asyncHandler(async (req, res) => {
+    const input = parseQuery(z.strictObject({ siteId: objectIdSchema.optional(), memberId: z.string().min(1).optional(), cursor: objectIdSchema.optional(), limit: z.coerce.number().int().min(1).max(100).default(25) }), req.query);
+    res.json(await activityHistory(deps.db, authOf(req), input));
+  }));
+
+  router.post('/accounts', limiter(deps, { windowMs: 3600000, limit: 30, prefix: 'account-create:', key: userOrIp }), asyncHandler(async (req, res) => {
+    requireRecentAuth(req);
+    res.status(201).json(await createAccount(deps, authOf(req), parseBody(accountCreateSchema, req.body), req.requestId));
+  }));
+  router.patch('/team/:memberId/profile', asyncHandler(async (req, res) => {
+    requireCapability(req, 'owner.team');
+    const input = parseBody(staffProfileUpdateSchema, req.body);
+    const result = await updateStaffProfile(deps.db, authOf(req), param(req, 'memberId'), input, req.requestId);
+    if (input.email) await deps.auth.api.sendVerificationEmail({ body: { email: input.email, callbackURL: `${deps.env.trustedWebOrigins[0]}/sign-in` } });
+    res.json(result);
+  }));
 
   router.get(
     '/sites',
@@ -385,7 +425,7 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
     '/sites',
     limiter(deps, { windowMs: 60 * 60 * 1000, limit: 30, prefix: 'site-create:', key: userOrIp }),
     asyncHandler(async (req, res) => {
-      requireCapability(req, 'owner.sites');
+      if (!authOf(req).roles.includes('PLATFORM_ADMIN')) requireCapability(req, 'owner.sites');
       const input = parseBody(siteCreateSchema, req.body);
       res.status(201).json(await createOwnerSite(deps.db, authOf(req), input, req.requestId));
     }),
@@ -401,7 +441,6 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
   router.patch(
     '/sites/:siteId',
     asyncHandler(async (req, res) => {
-      requireCapability(req, 'owner.sites');
       const input = parseBody(siteUpdateSchema, req.body);
       res.json(
         await updateOwnerSite(deps.db, authOf(req), objectId(param(req, 'siteId'), 'siteId'), input, req.requestId),
@@ -475,7 +514,7 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
   router.post(
     '/sites/:siteId/team-lead',
     asyncHandler(async (req, res) => {
-      requireCapability(req, 'owner.sites');
+      if (!authOf(req).roles.includes('PLATFORM_ADMIN')) requireCapability(req, 'owner.sites');
       const input = parseBody(teamLeadUpdateSchema, req.body);
       res.json(
         await setSiteTeamLead(
@@ -492,7 +531,7 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
   router.post(
     '/sites/:siteId/inspector',
     asyncHandler(async (req, res) => {
-      requireCapability(req, 'owner.sites');
+      if (!authOf(req).roles.includes('PLATFORM_ADMIN')) requireCapability(req, 'owner.sites');
       const input = parseBody(siteInspectorUpdateSchema, req.body);
       res.json(
         await setSiteInspector(
@@ -569,7 +608,7 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
     '/sites/:siteId/lifecycle',
     limiter(deps, { windowMs: 60 * 60 * 1000, limit: 30, prefix: 'site-lifecycle:', key: userOrIp }),
     asyncHandler(async (req, res) => {
-      requireCapability(req, 'owner.sites');
+      if (!authOf(req).roles.includes('PLATFORM_ADMIN')) requireCapability(req, 'owner.sites');
       const input = parseBody(siteLifecycleSchema, req.body);
       res.json(
         await changeSiteLifecycle(
@@ -625,7 +664,7 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
   router.delete(
     '/sites/:siteId/assignments/:assignmentId',
     asyncHandler(async (req, res) => {
-      requireCapability(req, 'owner.team');
+      if (!authOf(req).roles.includes('PLATFORM_ADMIN')) requireCapability(req, 'owner.team');
       const input = parseBody(assignmentRemoveSchema, req.body ?? {});
       res.json(
         await removeAssignment(
@@ -1251,6 +1290,11 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
       );
     }),
   );
+
+  adminRouter.patch('/users/:userId', asyncHandler(async (req, res) => {
+    requireCapability(req, 'admin.users'); requireRecentAuth(req);
+    res.json(await updateAccountProfile(deps, authOf(req), param(req, 'userId'), parseBody(accountProfileSchema, req.body), req.requestId));
+  }));
 
   adminRouter.get(
     '/users',

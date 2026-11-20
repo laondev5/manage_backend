@@ -5,9 +5,10 @@ export const ROLE = {
   PLATFORM_ADMIN: 'PLATFORM_ADMIN',
   SITE_OWNER: 'SITE_OWNER',
   STAFF: 'STAFF',
+  SUPERVISOR: 'SUPERVISOR',
 } as const;
 
-export const roleSchema = z.enum(['PLATFORM_ADMIN', 'SITE_OWNER', 'STAFF']);
+export const roleSchema = z.enum(['PLATFORM_ADMIN', 'SITE_OWNER', 'STAFF', 'SUPERVISOR']);
 export type Role = z.infer<typeof roleSchema>;
 
 export const membershipStatusSchema = z.enum(['ACTIVE', 'SUSPENDED', 'REVOKED']);
@@ -69,6 +70,7 @@ export const membershipSummarySchema = z.object({
 });
 
 export const meResponseSchema = z.object({
+  mustChangePassword: z.boolean().optional(),
   user: z.object({
     id: z.string(),
     name: z.string(),

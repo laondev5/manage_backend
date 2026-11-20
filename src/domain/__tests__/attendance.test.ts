@@ -54,18 +54,18 @@ describe('clock-in decisions', () => {
     expect(decision.outcome).toBe('ACCEPTED');
   });
 
-  it('records an outside clock-in as a reviewable exception', () => {
+  it('rejects an outside clock-in', () => {
     const decision = decideClockIn({
       ...base,
       location: { point: { latitude: 6.45, longitude: 3.4219 }, accuracyMeters: 12 },
     });
-    expect(decision.outcome).toBe('NEEDS_REVIEW');
+    expect(decision.outcome).toBe('REJECTED');
     expect(decision.reviewReason).toContain('outside');
   });
 
-  it('does not reject clock-in merely because GPS is missing', () => {
+  it('rejects clock-in when GPS is missing', () => {
     const decision = decideClockIn({ ...base, location: null });
-    expect(decision.outcome).toBe('NEEDS_REVIEW');
+    expect(decision.outcome).toBe('REJECTED');
   });
 
   it('rejects an unassigned site', () => {

@@ -11,3 +11,5 @@ export * from './devices.js';
 export * from './team.js';
 export * from './reports.js';
 export * from './reviews.js';
+export * from './accounts.js';
+export * from './activity.js';

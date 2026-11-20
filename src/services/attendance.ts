@@ -26,7 +26,6 @@ import {
   findShiftById,
   findSite,
   findWorkingShift,
-  getPolicyAtVersion,
   insertAttendanceEvent,
   insertShift,
   isDuplicateKey,
@@ -212,9 +211,11 @@ async function clockIn(
       requestId,
     );
   }
-  const policyRecord = input.sitePolicyVersion
-    ? await getPolicyAtVersion(db.c, site._id, input.sitePolicyVersion)
-    : null;
+  // Resolve the policy valid at capture time on the server; never let a client
+  // select an older, more permissive boundary by supplying a version number.
+  const policyRecord = await db.c.sitePolicies.findOne({ siteId: site._id,
+    createdAt: { $lte: new Date(input.capturedAt) },
+  }, { sort: { createdAt: -1, version: -1 } });
   const policy = policyRecord?.policy ?? site.policy;
   const sitePoint = policyRecord
     ? {
@@ -224,6 +225,9 @@ async function clockIn(
     : pointOf(site);
 
   const capturedAt = new Date(input.capturedAt);
+  if (input.location && Math.abs(capturedAt.getTime() - new Date(input.location.capturedAt).getTime()) > policy.freshnessSeconds * 1000) {
+    return orphanEvent(db, auth, input, 'CLOCK_IN', 'REJECTED', 'Obtain a fresh location reading before clocking in.', requestId);
+  }
   const decision = decideClockIn({
     assignmentActive: Boolean(assignment),
     siteActive: site.status === 'ACTIVE',

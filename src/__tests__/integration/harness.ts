@@ -17,7 +17,7 @@ import {
 import { createAuth } from '../../auth.js';
 import { createApp } from '../../create-app.js';
 import { loadEnv } from '../../env.js';
-import { createMailer } from '../../mail.js';
+import { createMailer, type Mailer } from '../../mail.js';
 
 export const TEST_PASSWORD = 'ManageTest!2026';
 export type TestAgent = ReturnType<typeof request.agent>;
@@ -60,12 +60,13 @@ export type TestContext = Awaited<ReturnType<typeof createTestContext>>;
 
 export async function createTestContext(
   overrides: NodeJS.ProcessEnv = {},
-  options: { standalone?: boolean } = {},
+  options: { standalone?: boolean; mailer?: Mailer } = {},
 ) {
   const mongo = options.standalone
-    ? await MongoMemoryServer.create()
+    ? await MongoMemoryServer.create({ instance: { launchTimeout: 60_000 } })
     : await MongoMemoryReplSet.create({
         replSet: { count: 1, storageEngine: 'wiredTiger' },
+        instanceOpts: [{ launchTimeout: 60_000 }],
       });
   const uri = mongo.getUri('manage_test');
   const env = loadEnv({
@@ -84,7 +85,7 @@ export async function createTestContext(
   await ensureIndexes(db.db);
 
   const logger = pino({ level: 'silent' });
-  const mailer = createMailer(env, logger);
+  const mailer = options.mailer ?? createMailer(env, logger);
   const auth = createAuth(db, env, logger, mailer);
   const app = createApp({ db, auth, env, mailer }, logger);
 

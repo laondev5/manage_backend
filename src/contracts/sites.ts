@@ -85,6 +85,8 @@ export const siteLifecycleSchema = z.strictObject({
 export type SiteLifecycleInput = z.infer<typeof siteLifecycleSchema>;
 
 export const siteSummarySchema = z.object({
+  policy: sitePolicySchema.optional(),
+  canUpdateLocation: z.boolean().optional(),
   id: z.string(),
   organizationId: z.string(),
   organizationName: z.string().optional(),

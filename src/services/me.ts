@@ -14,6 +14,7 @@ const OWNER_STEPS = ['siteDetailsDone', 'boundaryDone', 'inviteDone', 'alertsRev
 
 export function meResponse(auth: AuthContext): MeResponse {
   return {
+    mustChangePassword: auth.context.user.mustChangePassword === true,
     user: {
       id: auth.user.id,
       name: auth.user.name,
@@ -70,7 +71,7 @@ export async function onboardingState(
   auth: AuthContext,
 ): Promise<OnboardingState> {
   const membership = await activeMembership(db, auth);
-  const staffFlags = membership?.role === 'STAFF' ? membership.onboarding : null;
+  const staffFlags = membership && ['STAFF', 'SUPERVISOR'].includes(membership.role) ? membership.onboarding : null;
   const ownerFlags =
     membership?.role === 'SITE_OWNER' || membership?.role === 'PLATFORM_ADMIN'
       ? membership.onboarding
@@ -105,10 +106,10 @@ export async function updateOnboarding(
   if (!staffStep && !ownerStep) {
     throw new AppError(422, 'VALIDATION_ERROR', 'Unknown onboarding step.');
   }
-  if (staffStep && membership.role !== 'STAFF') {
+  if (staffStep && !['STAFF', 'SUPERVISOR'].includes(membership.role)) {
     throw forbidden('This onboarding step is for staff accounts.');
   }
-  if (ownerStep && membership.role === 'STAFF') {
+  if (ownerStep && ['STAFF', 'SUPERVISOR'].includes(membership.role)) {
     throw forbidden('This onboarding step is for site owners.');
   }
   await updateOnboardingStep(db.c, {
