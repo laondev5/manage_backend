@@ -25,3 +25,9 @@ sending-only key returned restricted_api_key for the read-only domains endpoint;
 that is expected for this key scope and does not mean it cannot send. Vercel
 environment values have not been inspected. Set EMAIL_FROM to an address on your
 verified domain and redeploy the API after changing Vercel environment variables.
+
+Validation: 53 API unit tests and 54 integration tests passed on 21 November.
+The authorization sweep checks all 84 registered protected business endpoints
+without a session; it does not claim every authenticated input/provider outcome
+was exercised. API lint/typecheck/build and serverless bundle import passed.
+Web lint/typecheck/build passed; its test command currently has no test files.
