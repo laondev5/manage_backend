@@ -35,6 +35,48 @@ tags:
   - name: Internal
   - name: Webhooks
 paths:
+  /api/v1/accounts:
+    post:
+      tags: [Team]
+      summary: Create staff, supervisor, owner or administrator account
+      description: |
+        MFA and recent authentication required. Owners may create staff/supervisors
+        only within their scope; platform administrators may create other roles.
+        Verification and temporary-password emails are sent separately. A 201
+        means the account exists. Always inspect emailStatus; failed means the
+        user should request a password reset, not create a duplicate account.
+        accepted means provider acceptance, not confirmed inbox delivery.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [organizationId, name, email, phone, role]
+              properties:
+                organizationId: { type: string }
+                name: { type: string, minLength: 2, maxLength: 120 }
+                email: { type: string, format: email }
+                phone: { type: string, minLength: 5, maxLength: 30 }
+                role: { type: string, enum: [STAFF, SUPERVISOR, SITE_OWNER, PLATFORM_ADMIN] }
+                siteIds: { type: array, maxItems: 100, items: { type: string } }
+                canUpdateSiteLocation: { type: boolean, default: false }
+      responses:
+        '201':
+          description: Account created; inspect emailStatus
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  requiresEmailVerification: { type: boolean }
+                  requiresPasswordChange: { type: boolean }
+                  emailProvider: { type: string, enum: [resend, local] }
+                  emailStatus: { type: string, enum: [accepted, local, failed] }
+        '403': { description: Missing permission, MFA or recent authentication }
+        '409': { description: Account already exists }
   /health/live:
     get:
       tags: [Public]

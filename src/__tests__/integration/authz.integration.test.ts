@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { OrganizationDoc, SiteDoc } from '../../database/index.js';
@@ -47,9 +48,16 @@ describe('authorization boundaries', () => {
     await ctx.close();
   });
 
-  it('returns 401 for unauthenticated requests', async () => {
-    const response = await request(ctx.app).get('/api/v1/me');
-    expect(response.status).toBe(401);
+  it('denies unauthenticated requests to every registered protected business endpoint', async () => {
+    const source = readFileSync(new URL('../../routes/index.ts', import.meta.url), 'utf8');
+    const protectedSource = source.slice(source.indexOf('router.use(requireAuth(deps))'));
+    const routes = [...protectedSource.matchAll(/(router|adminRouter)\.(get|post|patch|put|delete)\(\s*'([^']+)'/g)];
+    expect(routes.length).toBeGreaterThan(40);
+    for (const [, router, method, route] of routes) {
+      const path = '/api/v1' + (router === 'adminRouter' ? '/admin' : '') + route!.replace(/:[A-Za-z]+/g, '000000000000000000000001');
+      const response = await request(ctx.app)[method as 'get' | 'post' | 'patch' | 'put' | 'delete'](path);
+      expect(response.status, `${method} ${path}`).toBe(401);
+    }
   });
 
   it("does not let an owner read another organization's site", async () => {

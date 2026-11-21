@@ -57,6 +57,7 @@ export async function createAccount(deps: AppDeps, auth: AuthContext, input: Acc
     await deps.db.db.collection('session').deleteMany({ userId });
     throw error;
   }
+  let emailStatus: 'accepted' | 'local' | 'failed' = deps.mailer.provider === 'local' ? 'local' : 'accepted';
   try {
     await deps.mailer.send({
       to: input.email, idempotencyKey: `account-password:${userId}`,
@@ -66,9 +67,12 @@ export async function createAccount(deps: AppDeps, auth: AuthContext, input: Acc
     });
   } catch {
     // Never report delivery success or expose the password in the response/log.
-    throw conflict('Account created, but the temporary-password email failed. Use Forgot password to request a secure reset.');
+    emailStatus = 'failed';
+    await appendAudit(deps.db.c, { actorId: auth.user.id, actorName: auth.user.name, actorRole: auth.roles[0] ?? null,
+      action: 'account.email_failed', targetType: 'user', targetId: userId, organizationId, requestId,
+      summary: 'Account created; temporary-password email was not accepted by the provider.', meta: {} });
   }
-  return { id: userId, requiresEmailVerification: true, requiresPasswordChange: true, emailProvider: deps.mailer.provider };
+  return { id: userId, requiresEmailVerification: true, requiresPasswordChange: true, emailProvider: deps.mailer.provider, emailStatus };
 }
 
 export async function updateAccountProfile(deps: AppDeps, auth: AuthContext, userId: string,

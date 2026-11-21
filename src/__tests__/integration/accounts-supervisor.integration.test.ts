@@ -5,6 +5,7 @@ import { createTestContext, type TestAgent, type TestContext } from './harness.j
 
 describe('staff provisioning and supervisor boundaries', () => {
   const messages: MailMessage[] = [];
+  let failPasswordEmail = false;
   let ctx: TestContext; let owner: TestAgent; let supervisor: TestAgent;
   let orgId: string; let siteId: string; let supervisorId: string;
   const mutate = async (agent: TestAgent, method: 'post' | 'patch', path: string, body: object) => {
@@ -12,7 +13,7 @@ describe('staff provisioning and supervisor boundaries', () => {
     return agent[method](path).set('origin', 'http://localhost:3000').set('x-csrf-token', csrf.body.token).send(body);
   };
   beforeAll(async () => {
-    ctx = await createTestContext({}, { mailer: { provider: 'local', async send(message) { messages.push(message); return { provider: 'local', providerMessageId: 'test' }; } } });
+    ctx = await createTestContext({}, { mailer: { provider: 'local', async send(message) { if (failPasswordEmail && message.idempotencyKey.startsWith('account-password:')) throw new Error('Test provider rejection'); messages.push(message); return { provider: 'local', providerMessageId: 'test' }; } } });
     const ownerId = await ctx.createUser('provision-owner@example.com');
     supervisorId = await ctx.createUser('supervisor@example.com');
     const org = await ctx.createOrganization('Provisioning', 'provision-owner@example.com'); orgId = org._id.toHexString();
@@ -69,6 +70,19 @@ describe('staff provisioning and supervisor boundaries', () => {
     expect((await mutate(agent, 'post', '/api/v1/me/initial-password', { currentPassword: password, newPassword: 'OwnerPassword!2026' })).status).toBe(200);
     expect((await agent.get('/api/v1/me')).body.mfaSetupRequired).toBe(true);
     expect((await agent.get('/api/v1/team')).status).toBe(403);
+  });
+  it('preserves the created account and reports failed email without exposing credentials', async () => {
+    failPasswordEmail = true;
+    try {
+      const body = { organizationId: orgId, name: 'Delivery failure', email: 'delivery-failure@example.com', phone: '+2348000000003', role: 'STAFF', siteIds: [siteId] };
+      const response = await mutate(owner, 'post', '/api/v1/accounts', body);
+      expect(response.status).toBe(201);
+      expect(response.body.emailStatus).toBe('failed');
+      expect(response.body.password).toBeUndefined();
+      expect(await ctx.c.memberships.countDocuments({ userId: response.body.id })).toBe(1);
+      expect((await mutate(owner, 'post', '/api/v1/accounts', body)).status).toBe(409);
+      expect(await ctx.c.users.countDocuments({ email: body.email })).toBe(1);
+    } finally { failPasswordEmail = false; }
   });
   it('requires explicit permission, allows only coordinates, and rechecks revoked permissions', async () => {
     const path = `/api/v1/sites/${siteId}`;

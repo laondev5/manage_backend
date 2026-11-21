@@ -28,18 +28,28 @@ export function createMailer(env: Env, logger: { info: (obj: object, msg?: strin
     provider: env.emailProvider,
     async send(message: MailMessage): Promise<MailResult> {
       if (resend) {
-        const result = await resend.emails.send({
-          from: env.EMAIL_FROM,
-          to: message.to,
-          subject: message.subject,
-          html: message.html,
-          text: message.text,
-          headers: { 'Idempotency-Key': message.idempotencyKey },
-        });
-        if (result.error) throw new Error(`Resend rejected the message: ${result.error.message}`);
-        const id = result.data?.id;
-        if (!id) throw new Error('Resend did not return a message id.');
-        return { provider: 'resend', providerMessageId: id };
+        // The SDK's second argument sets the HTTP idempotency header. Payload
+        // headers are email headers and do not deduplicate API requests.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const result = await resend.emails.send({
+            from: env.EMAIL_FROM, to: message.to, subject: message.subject,
+            html: message.html, text: message.text,
+          }, { idempotencyKey: message.idempotencyKey });
+          if (!result.error && result.data?.id) {
+            return { provider: 'resend', providerMessageId: result.data.id };
+          }
+          const status = result.error?.statusCode ?? 0;
+          const code = result.error?.name ?? 'missing_message_id';
+          const transient = code === 'rate_limit_exceeded' || code === 'application_error' || status >= 500;
+          // Never log provider messages: they can contain recipient addresses.
+          logger.info({ provider: 'resend', status, code, attempt: attempt + 1 }, 'Email provider rejected a send');
+          if (!transient || attempt === 2) throw new Error(`Email provider failure (${code}, ${status}).`);
+          const retryAfter = Number(result.headers?.['retry-after']);
+          const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000 * 2 ** attempt;
+          if (delay > 5000) throw new Error(`Email provider retry window too long (${code}).`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+        throw new Error('Email provider retry limit reached.');
       }
 
       await mkdir(directory, { recursive: true });
