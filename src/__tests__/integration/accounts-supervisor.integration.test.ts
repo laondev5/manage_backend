@@ -13,7 +13,7 @@ describe('staff provisioning and supervisor boundaries', () => {
     return agent[method](path).set('origin', 'http://localhost:3000').set('x-csrf-token', csrf.body.token).send(body);
   };
   beforeAll(async () => {
-    ctx = await createTestContext({}, { mailer: { provider: 'local', async send(message) { if (failPasswordEmail && message.idempotencyKey.startsWith('account-password:')) throw new Error('Test provider rejection'); messages.push(message); return { provider: 'local', providerMessageId: 'test' }; } } });
+    ctx = await createTestContext({}, { mailer: { provider: 'local', async send(message) { if (failPasswordEmail && message.idempotencyKey.startsWith('account-setup:')) throw new Error('Test provider rejection'); messages.push(message); return { provider: 'local', providerMessageId: 'test' }; } } });
     const ownerId = await ctx.createUser('provision-owner@example.com');
     supervisorId = await ctx.createUser('supervisor@example.com');
     const org = await ctx.createOrganization('Provisioning', 'provision-owner@example.com'); orgId = org._id.toHexString();
@@ -36,13 +36,24 @@ describe('staff provisioning and supervisor boundaries', () => {
     expect(response.body.password).toBeUndefined(); expect(response.body.token).toBeUndefined();
     expect(await ctx.c.memberships.countDocuments({ userId: response.body.id, role: 'STAFF' })).toBe(1);
     expect(await ctx.c.assignments.countDocuments({ memberId: response.body.id })).toBe(1);
+    // One email must carry both the verification link and the temporary password.
+    const setup = messages.filter((m) => m.to === 'created@example.com');
+    expect(setup).toHaveLength(1);
+    expect(setup[0]?.text).toContain('/api/auth/verify-email?token=');
+    expect(setup[0]?.text).toMatch(/Sign-in code: \S+/);
   });
   it('requires replacement and consumes the temporary password only once', async () => {
     const email = 'created@example.com';
-    const message = messages.find((m) => m.to === email && m.idempotencyKey.startsWith('account-password:'));
-    const password = message?.text.match(/Temporary password: (\S+)/)?.[1];
+    const message = messages.find((m) => m.to === email && m.idempotencyKey.startsWith('account-setup:'));
+    const password = message?.text.match(/Sign-in code: (\S+)/)?.[1];
     expect(Boolean(password)).toBe(true);
-    await ctx.c.users.updateOne({ email }, { $set: { emailVerified: true } });
+    // The link from the setup email must actually verify the address.
+    const verifyUrl = message?.text.match(/(https?:\/\/\S+\/api\/auth\/verify-email\?token=\S+)/)?.[1];
+    expect(Boolean(verifyUrl)).toBe(true);
+    const parsed = new URL(verifyUrl!);
+    const verification = await request(ctx.app).get(`${parsed.pathname}${parsed.search}`).set('origin', 'http://localhost:3000');
+    expect([200, 302]).toContain(verification.status);
+    expect((await ctx.c.users.findOne({ email }))?.emailVerified).toBe(true);
     const agent = request.agent(ctx.app);
     expect((await agent.post('/api/auth/sign-in/email').set('origin', 'http://localhost:3000').send({ email, password })).status).toBe(200);
     expect((await agent.get('/api/v1/me')).body.mustChangePassword).toBe(true);
@@ -62,7 +73,7 @@ describe('staff provisioning and supervisor boundaries', () => {
     const email = 'new-owner@example.com';
     const created = await mutate(admin, 'post', '/api/v1/accounts', { organizationId: orgId, name: 'New owner', email, phone: '+2348000000002', role: 'SITE_OWNER' });
     expect(created.status).toBe(201);
-    const password = messages.find((m) => m.to === email && m.idempotencyKey.startsWith('account-password:'))?.text.match(/Temporary password: (\S+)/)?.[1];
+    const password = messages.find((m) => m.to === email && m.idempotencyKey.startsWith('account-setup:'))?.text.match(/Sign-in code: (\S+)/)?.[1];
     expect(Boolean(password)).toBe(true);
     await ctx.c.users.updateOne({ email }, { $set: { emailVerified: true } });
     const agent = request.agent(ctx.app);

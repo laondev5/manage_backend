@@ -1,8 +1,10 @@
+import { createEmailVerificationToken } from 'better-auth/api';
 import { ObjectId } from 'mongodb';
 import { randomBytes } from 'node:crypto';
 import { conflict, forbidden, notFound, type AccountCreateInput } from '../contracts/index.js';
 import { appendAudit, createAssignment, createMembership, usersByIds, withTransaction } from '../database/index.js';
 import type { AppDeps, AuthContext } from '../http/context.js';
+import { accountSetupEmail } from '../mail.js';
 
 /** Authenticated provisioning only; public sign-up remains blocked. */
 export async function createAccount(deps: AppDeps, auth: AuthContext, input: AccountCreateInput, requestId: string) {
@@ -57,20 +59,32 @@ export async function createAccount(deps: AppDeps, auth: AuthContext, input: Acc
     await deps.db.db.collection('session').deleteMany({ userId });
     throw error;
   }
+  // Build the verification link here so one email carries both the link and the
+  // temporary password. Relying on signUpEmail's automatic verification mail
+  // produced a second, easily lost message and left recipients with no next step.
+  const signInUrl = `${deps.env.trustedWebOrigins[0]}/sign-in`;
+  const verificationToken = await createEmailVerificationToken(
+    deps.env.BETTER_AUTH_SECRET,
+    input.email,
+    undefined,
+    60 * 60,
+    { userId },
+  );
+  const verifyUrl = `${deps.env.AUTH_BASE_URL.replace(/\/$/, '')}/api/auth/verify-email?token=${encodeURIComponent(verificationToken)}&callbackURL=${encodeURIComponent(signInUrl)}`;
+
   let emailStatus: 'accepted' | 'local' | 'failed' = deps.mailer.provider === 'local' ? 'local' : 'accepted';
   try {
     await deps.mailer.send({
-      to: input.email, idempotencyKey: `account-password:${userId}`,
-      subject: 'Your Manage account — temporary password',
-      text: `Your Manage account has been created.\n\nTemporary password: ${temporaryPassword}\n\nVerify your email using the separate verification email, then sign in to Manage and choose a new password. This temporary password expires in 24 hours and cannot be reused after replacement. If it expires, use Forgot password.`,
-      html: `<p>Your Manage account has been created.</p><p>Temporary password: <strong>${temporaryPassword}</strong></p><p>Verify your email using the separate verification email, then sign in and choose a new password. This password expires in 24 hours and cannot be reused after replacement. If it expires, use Forgot password.</p>`,
+      to: input.email,
+      idempotencyKey: `account-setup:${userId}`,
+      ...accountSetupEmail({ name: input.name, email: input.email, temporaryPassword, verifyUrl, signInUrl }),
     });
   } catch {
     // Never report delivery success or expose the password in the response/log.
     emailStatus = 'failed';
     await appendAudit(deps.db.c, { actorId: auth.user.id, actorName: auth.user.name, actorRole: auth.roles[0] ?? null,
       action: 'account.email_failed', targetType: 'user', targetId: userId, organizationId, requestId,
-      summary: 'Account created; temporary-password email was not accepted by the provider.', meta: {} });
+      summary: 'Account created; setup email was not accepted by the provider.', meta: {} });
   }
   return { id: userId, requiresEmailVerification: true, requiresPasswordChange: true, emailProvider: deps.mailer.provider, emailStatus };
 }

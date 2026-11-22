@@ -15,7 +15,10 @@ describe('email provider reliability', () => {
     await vi.runAllTimersAsync();
     expect(await pending).toEqual({ provider: 'resend', providerMessageId: 'provider-id' });
     expect(send).toHaveBeenCalledTimes(2);
-    for (const call of send.mock.calls) { expect(call[1]).toEqual({ idempotencyKey: message.idempotencyKey }); expect(call[0].headers).toBeUndefined(); }
+    for (const call of send.mock.calls) {
+      expect(call[1]).toEqual({ idempotencyKey: message.idempotencyKey });
+      expect(call[0].headers).toEqual({ 'X-Auto-Response-Suppress': 'OOF, AutoReply' });
+    }
     expect(JSON.stringify(info.mock.calls)).not.toContain(message.text);
     expect(JSON.stringify(info.mock.calls)).not.toContain(message.to);
   });

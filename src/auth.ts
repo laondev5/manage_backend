@@ -38,24 +38,29 @@ export function createAuth(db: Database, env: Env, logger: Logger, mailer = crea
           mustChangePassword: false, initialPasswordChanging: false, temporaryPasswordExpiresAt: null,
         } });
       },
-      async sendResetPassword({ user, url }) {
+      async sendResetPassword({ user, url, token }) {
         const message = resetPasswordEmail(url);
         await mailer.send({
           to: user.email,
-          idempotencyKey: `reset:${user.id}:${Date.now()}`,
+          // The token is stable for this request, so provider retries cannot
+          // turn one reset request into several emails in the inbox.
+          idempotencyKey: `reset:${user.id}:${token ?? Date.now()}`,
           ...message,
         });
       },
     },
     emailVerification: {
-      sendOnSignUp: true,
+      // Account provisioning sends a single setup email containing both the
+      // verification link and the temporary password. Resends still use this
+      // callback via /send-verification-email.
+      sendOnSignUp: false,
       autoSignInAfterVerification: false,
       expiresIn: 60 * 60,
-      async sendVerificationEmail({ user, url }) {
+      async sendVerificationEmail({ user, url, token }) {
         const message = verificationEmail(url);
         await mailer.send({
           to: user.email,
-          idempotencyKey: `verify:${user.id}:${Date.now()}`,
+          idempotencyKey: `verify:${user.id}:${token ?? Date.now()}`,
           ...message,
         });
       },

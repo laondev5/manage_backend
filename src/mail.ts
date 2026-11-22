@@ -34,6 +34,8 @@ export function createMailer(env: Env, logger: { info: (obj: object, msg?: strin
           const result = await resend.emails.send({
             from: env.EMAIL_FROM, to: message.to, subject: message.subject,
             html: message.html, text: message.text,
+            // Transactional mail should not generate out-of-office replies.
+            headers: { 'X-Auto-Response-Suppress': 'OOF, AutoReply' },
           }, { idempotencyKey: message.idempotencyKey });
           if (!result.error && result.data?.id) {
             return { provider: 'resend', providerMessageId: result.data.id };
@@ -80,8 +82,8 @@ export function createMailer(env: Env, logger: { info: (obj: object, msg?: strin
 }
 
 export const verificationEmail = (url: string) => ({
-  subject: 'Verify your Manage email',
-  text: `Confirm your email to finish setting up Manage.\n\n${url}\n\nThis link expires in one hour.`,
+  subject: 'Confirm your Manage email address',
+  text: `Open this link to confirm your Manage email address.\n\n${url}\n\nThis link expires in one hour.`,
   html: `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#F5F7FB;padding:32px">
   <div style="max-width:520px;margin:0 auto;background:#fff;border:1px solid #E3E8F1;border-radius:16px;padding:32px">
     <div style="font-size:13px;font-weight:700;letter-spacing:.08em;color:#2457D6;text-transform:uppercase">Manage</div>
@@ -93,8 +95,56 @@ export const verificationEmail = (url: string) => ({
 </div>`,
 });
 
+/**
+ * One actionable message for an administrator/owner-created account. The
+ * verification link proves ownership of the address, and the temporary
+ * password is included so the recipient never has to hunt for a second mail.
+ */
+export const accountSetupEmail = (args: {
+  name: string;
+  email: string;
+  temporaryPassword: string;
+  verifyUrl: string;
+  signInUrl: string;
+}) => {
+  const { name, email, temporaryPassword, verifyUrl, signInUrl } = args;
+  return {
+    subject: 'Your Manage account is ready',
+    text: `Hi ${name},
+
+Your Manage account is ready. Complete both steps below.
+
+1. Confirm your email address
+${verifyUrl}
+
+2. Sign in
+${signInUrl}
+Email: ${email}
+Sign-in code: ${temporaryPassword}
+
+Manage will ask you to choose a new password when you sign in. The sign-in code expires in 24 hours. If it expires, use Forgot password on the sign-in screen.
+
+If you were not expecting this account, contact your administrator.`,
+    html: `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#F5F7FB;padding:32px">
+  <div style="max-width:520px;margin:0 auto;background:#fff;border:1px solid #E3E8F1;border-radius:16px;padding:32px">
+    <div style="font-size:13px;font-weight:700;letter-spacing:.08em;color:#2457D6;text-transform:uppercase">Manage</div>
+    <h1 style="font-size:24px;color:#14213D;margin:12px 0 8px">Your account is ready</h1>
+    <p style="color:#526078;line-height:1.6">Hi ${name}, your account is ready. Complete both steps below.</p>
+    <p style="color:#14213D;font-weight:700;margin-top:24px">1. Confirm your email address</p>
+    <a href="${verifyUrl}" style="display:inline-block;margin-top:10px;background:#2457D6;color:#fff;text-decoration:none;padding:14px 22px;border-radius:12px;font-weight:600">Confirm email</a>
+    <p style="color:#7C89A0;font-size:12px;line-height:1.5;margin-top:8px">If the button does not work, copy this link into your browser:<br/>${verifyUrl}</p>
+    <p style="color:#14213D;font-weight:700;margin-top:24px">2. Sign in</p>
+    <p style="color:#526078;line-height:1.6;margin-top:8px">Sign in at <a href="${signInUrl}" style="color:#2457D6">${signInUrl}</a> using:</p>
+    <p style="background:#F5F7FB;border:1px solid #E3E8F1;border-radius:10px;padding:12px 14px;color:#14213D;line-height:1.7">Email: <strong>${email}</strong><br/>Sign-in code: <strong style="letter-spacing:.02em">${temporaryPassword}</strong></p>
+    <p style="color:#526078;line-height:1.6;margin-top:16px">Manage will ask you to choose a new password when you sign in.</p>
+    <p style="color:#7C89A0;font-size:12px;margin-top:16px">The sign-in code expires in 24 hours. If it expires, use Forgot password on the sign-in screen. If you did not expect this account, contact your administrator.</p>
+  </div>
+</div>`,
+  };
+};
+
 export const resetPasswordEmail = (url: string) => ({
-  subject: 'Reset your Manage password',
+  subject: 'Manage password reset link',
   text: `Reset your Manage password using this link:\n\n${url}\n\nThis link expires in one hour. Resetting your password signs out other sessions.`,
   html: `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#F5F7FB;padding:32px">
   <div style="max-width:520px;margin:0 auto;background:#fff;border:1px solid #E3E8F1;border-radius:16px;padding:32px">
