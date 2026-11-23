@@ -1,0 +1,12 @@
+name = "manage-worker-tick"
+main = "src/index.js"
+compatibility_date = "2026-11-23"
+workers_dev = true
+
+# Cloudflare Workers Free plan supports Cron Triggers. Times are UTC.
+# Deploying replaces previous triggers, so keep the schedule here only.
+[triggers]
+crons = ["*/5 * * * *"]
+
+[observability]
+enabled = true

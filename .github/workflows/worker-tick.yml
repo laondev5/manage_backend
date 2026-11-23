@@ -5,11 +5,11 @@ name: Worker tick
 #   MANAGE_API_URL          https://<api-project>.vercel.app
 #   WORKER_TRIGGER_SECRET   same value as the API project's variable
 # Optional: VERCEL_PROTECTION_BYPASS, if Deployment Protection blocks the API.
+# Scheduled execution was disabled: this account is locked for billing, so
+# GitHub rejects every scheduled run before the job starts. The active free
+# scheduler is the Cloudflare Worker in cloudflare-worker/ (cron every 5 min).
+# Keep this manual trigger only as a fallback once billing is resolved.
 on:
-  schedule:
-    # GitHub runs schedules in UTC; runs may be delayed or dropped under load.
-    # Keep WORKER_SCHEDULE_SECONDS=300 on the API and monitor overdue heartbeats.
-    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 concurrency:
