@@ -86,8 +86,9 @@ export function decideClockIn(context: ClockInContext): ClockInDecision {
   return {
     outcome: 'REJECTED',
     reviewReason:
-      classified.reason ??
-      'You are outside the site boundary. Move inside the site before clocking in.',
+      classified.reason && classified.classification === 'UNCERTAIN'
+        ? `${classified.reason} Step outside, wait a few seconds for a stronger signal, then try again.`
+        : `You are about ${Math.round(classified.distanceMeters)} m from the site centre and outside its ${context.policy.radiusMeters} m boundary. Move onto the site and try again.`,
     distanceMeters: classified.distanceMeters,
     classification: classified.classification,
   };

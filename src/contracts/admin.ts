@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { objectIdSchema } from './ids.js';
+import { isoDateTimeSchema, objectIdSchema } from './ids.js';
 import { roleSchema } from './auth.js';
 
 export const organizationSummarySchema = z.object({
@@ -261,3 +261,119 @@ export const adminUserDeleteSummarySchema = z.object({
 });
 
 export type AdminUserDeleteSummary = z.infer<typeof adminUserDeleteSummarySchema>;
+
+export const ownerInsightsQuerySchema = z.strictObject({
+  siteId: objectIdSchema.optional(),
+  from: isoDateTimeSchema,
+  to: isoDateTimeSchema,
+  limit: z.coerce.number().int().min(1).max(200).default(60),
+});
+
+export type OwnerInsightsQuery = z.infer<typeof ownerInsightsQuerySchema>;
+
+export const attendanceRowStatusSchema = z.enum(['ACTIVE', 'LEFT_SITE', 'NOT_IN', 'COMPLETED']);
+
+export type AttendanceRowStatus = z.infer<typeof attendanceRowStatusSchema>;
+
+export const attendanceRowSchema = z.object({
+  shiftId: z.string(),
+  memberId: z.string(),
+  memberName: z.string(),
+  memberEmail: z.string(),
+  siteId: z.string(),
+  siteName: z.string(),
+  startedAt: z.string(),
+  endedAt: z.string().nullable(),
+  minutes: z.number().nullable(),
+  status: attendanceRowStatusSchema,
+  presence: z.enum(['UNKNOWN', 'INSIDE', 'EXIT_PENDING', 'OUTSIDE', 'NOT_WORKING']),
+  reviewState: z.enum(['ACCEPTED', 'NEEDS_REVIEW', 'REJECTED']),
+  lastDistanceMeters: z.number().nullable(),
+  lastLocationUpdateAt: z.string().nullable(),
+  timezone: z.string(),
+});
+
+export type AttendanceRow = z.infer<typeof attendanceRowSchema>;
+
+export const liveStaffSchema = z.object({
+  shiftId: z.string(),
+  siteId: z.string(),
+  siteName: z.string(),
+  memberId: z.string(),
+  memberName: z.string(),
+  startedAt: z.string(),
+  presence: z.enum(['UNKNOWN', 'INSIDE', 'EXIT_PENDING', 'OUTSIDE']),
+  latitude: z.number().nullable(),
+  longitude: z.number().nullable(),
+  accuracyMeters: z.number().nullable(),
+  distanceMeters: z.number().nullable(),
+  lastUpdateAt: z.string().nullable(),
+});
+
+export type LiveStaff = z.infer<typeof liveStaffSchema>;
+
+export const liveSiteSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  address: z.string(),
+  latitude: z.number(),
+  longitude: z.number(),
+  radiusMeters: z.number(),
+  assignedCount: z.number(),
+  onSiteCount: z.number(),
+  outsideCount: z.number(),
+  openAlerts: z.number(),
+});
+
+export type LiveSite = z.infer<typeof liveSiteSchema>;
+
+export const notInStaffSchema = z.object({
+  memberId: z.string(),
+  memberName: z.string(),
+  siteId: z.string(),
+  siteName: z.string(),
+});
+
+export const ownerInsightsSchema = z.object({
+  generatedAt: z.string(),
+  from: z.string(),
+  to: z.string(),
+  timezone: z.string(),
+  totals: z.object({
+    staffOnSite: z.number(),
+    staffAssigned: z.number(),
+    hoursToday: z.number(),
+    openAlerts: z.number(),
+    pendingCorrections: z.number(),
+    notInCount: z.number(),
+  }),
+  daily: z.array(
+    z.object({
+      date: z.string(),
+      hours: z.number(),
+      shifts: z.number(),
+    }),
+  ),
+  statusSplit: z.object({
+    onSite: z.number(),
+    leftSite: z.number(),
+    notIn: z.number(),
+    completed: z.number(),
+  }),
+  attendance: z.array(attendanceRowSchema),
+  live: z.object({
+    sites: z.array(liveSiteSchema),
+    staff: z.array(liveStaffSchema),
+    notIn: z.array(notInStaffSchema),
+  }),
+});
+
+export type OwnerInsights = z.infer<typeof ownerInsightsSchema>;
+
+export const siteLiveSchema = z.object({
+  generatedAt: z.string(),
+  site: liveSiteSchema,
+  staff: z.array(liveStaffSchema),
+});
+
+export type SiteLive = z.infer<typeof siteLiveSchema>;

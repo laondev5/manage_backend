@@ -32,14 +32,17 @@ export function classifyReading(
   policy: Pick<SitePolicy, 'radiusMeters' | 'exitBufferMeters' | 'entryBufferMeters' | 'maxAccuracyMeters'>,
 ): ClassifiedReading {
   const distance = distanceMeters(point, site);
-  if (accuracyMeters > policy.maxAccuracyMeters) {
+  // A GPS fix that is already well inside the site is good evidence even when the
+  // radius of uncertainty is wide: the user cannot be anywhere near the edge.
+  const comfortablyInside = distance + accuracyMeters < policy.radiusMeters - policy.entryBufferMeters;
+  if (accuracyMeters > policy.maxAccuracyMeters && !comfortablyInside) {
     return {
       classification: 'UNCERTAIN',
       distanceMeters: distance,
       reason: `Location accuracy ±${Math.round(accuracyMeters)} m exceeds the site limit of ±${policy.maxAccuracyMeters} m.`,
     };
   }
-  if (distance + accuracyMeters < policy.radiusMeters - policy.entryBufferMeters) {
+  if (comfortablyInside) {
     return { classification: 'INSIDE', distanceMeters: distance, reason: null };
   }
   if (distance - accuracyMeters > policy.radiusMeters + policy.exitBufferMeters) {

@@ -129,7 +129,12 @@ export function evaluatePresence(input: EvaluatePresenceInput): PresenceDecision
         ? new Date(previous.candidateSince)
         : reading.capturedAt;
       const candidateAge = (reading.capturedAt.getTime() - candidateSince.getTime()) / SECONDS;
-      if (candidateAge >= policy.graceSeconds) {
+      // A shift with no candidate open yet but a long-quiet presence record still
+      // has to confirm: measure from the last qualified reading in that case.
+      const quietAge = previous.lastQualifiedAt
+        ? (reading.capturedAt.getTime() - new Date(previous.lastQualifiedAt).getTime()) / SECONDS
+        : 0;
+      if (candidateAge >= policy.graceSeconds || (!previous.candidateSince && quietAge >= policy.graceSeconds)) {
         return {
           next: { ...base, state: 'OUTSIDE', candidateSince: null },
           action: 'DEPARTURE_CONFIRMED',
@@ -139,7 +144,11 @@ export function evaluatePresence(input: EvaluatePresenceInput): PresenceDecision
         };
       }
       return {
-        next: { ...base, state: 'EXIT_PENDING', candidateSince: candidateSince.toISOString() },
+        next: {
+          ...base,
+          state: 'EXIT_PENDING',
+          candidateSince: candidateSince.toISOString(),
+        },
         action: 'NONE',
         classification: 'OUTSIDE',
         distanceMeters: classified.distanceMeters,

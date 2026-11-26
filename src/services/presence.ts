@@ -130,6 +130,35 @@ export async function ingestObservation(
         session,
       );
 
+      // The candidate incident already exists, so a shift that is still inside can
+      // have a reading that arrives after the confirm window. Confirm it on the next
+      // inside reading so a departure is never lost between worker ticks.
+      if (
+        decision.classification === 'INSIDE' &&
+        (decision.action === 'CANDIDATE_CANCELLED' || decision.action === 'RETURNED')
+      ) {
+        const open = await findOpenIncident(db.c, shift._id);
+        if (open?.state === 'CANDIDATE') {
+          const confirmed = await confirmIncident(
+            db.c,
+            {
+              incidentId: open._id,
+              confirmedAt: capturedAt,
+              lastEvidenceAt: open.lastEvidenceAt,
+              distanceMeters: open.distanceMeters ?? 0,
+              accuracyMeters: open.detectionAccuracyMeters ?? 0,
+              latitude: open.detectionLocation?.coordinates[1] ?? 0,
+              longitude: open.detectionLocation?.coordinates[0] ?? 0,
+            },
+            session,
+          );
+          if (confirmed) {
+            const recipients = await resolveAlertRecipients(db.c, site);
+            await createIncidentAlerts(db.c, { incident: confirmed, site, recipients }, session);
+          }
+        }
+      }
+
       if (decision.action === 'CANDIDATE_OPENED') {
         await upsertCandidateIncident(
           db.c,

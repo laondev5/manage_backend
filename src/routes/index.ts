@@ -34,6 +34,7 @@ import {
   organizationCreateSchema,
   organizationDeleteSchema,
   organizationUpdateSchema,
+  ownerInsightsQuerySchema,
   platformSiteUpdateSchema,
   reportCreateSchema,
   reportUpdateSchema,
@@ -90,7 +91,7 @@ import {
   switchOrganization,
   updateOnboarding,
 } from '../services/me.js';
-import { exportTimesheets, ownerOverview, timesheets } from '../services/owner.js';
+import { exportTimesheets, ownerInsights, ownerOverview, siteLive, timesheets } from '../services/owner.js';
 import { ingestObservation } from '../services/presence.js';
 import {
   createReport,
@@ -1043,6 +1044,30 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
     asyncHandler(async (req, res) => {
       requireCapability(req, 'owner.overview');
       res.json(await ownerOverview(deps.db, authOf(req)));
+    }),
+  );
+
+  router.get(
+    '/owner/insights',
+    asyncHandler(async (req, res) => {
+      requireCapability(req, 'owner.overview');
+      const query = parseQuery(ownerInsightsQuerySchema, req.query);
+      res.json(
+        await ownerInsights(deps.db, authOf(req), {
+          siteId: query.siteId,
+          from: new Date(query.from),
+          to: new Date(query.to),
+          limit: query.limit,
+        }),
+      );
+    }),
+  );
+
+  router.get(
+    '/sites/:siteId/live',
+    asyncHandler(async (req, res) => {
+      requireCapability(req, 'owner.overview');
+      res.json(await siteLive(deps.db, authOf(req), objectId(param(req, 'siteId'), 'siteId')));
     }),
   );
 

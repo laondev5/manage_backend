@@ -167,7 +167,7 @@ export async function createTestContext(
       radiusMeters: 150,
       exitBufferMeters: 30,
       entryBufferMeters: 15,
-      graceSeconds: 120,
+      graceSeconds: 3600,
       maxAccuracyMeters: 50,
       freshnessSeconds: 120,
     };

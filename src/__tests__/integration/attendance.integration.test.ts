@@ -5,6 +5,7 @@ import { createTestContext, insideLocation, type TestAgent, type TestContext } f
 describe('attendance integrity', () => {
   let ctx: TestContext;
   let site: SiteDoc;
+  let secondSite: SiteDoc;
   let organization: OrganizationDoc;
   let staffAgent: TestAgent;
   let staffId: string;
@@ -46,6 +47,13 @@ describe('attendance integrity', () => {
       role: 'STAFF',
     });
     await ctx.assign({ organization, site, userId: staffId, membership });
+    secondSite = await ctx.createSite({
+      organization,
+      name: 'Lagos Annex',
+      ownerIds: [owner],
+      createdBy: owner,
+    });
+    await ctx.assign({ organization, site: secondSite, userId: staffId, membership });
     staffAgent = await ctx.signIn('staff@example.com');
   });
 
@@ -83,6 +91,30 @@ describe('attendance integrity', () => {
     const accepted = attempts.filter((response) => response.body.outcome === 'ACCEPTED');
     expect(accepted).toHaveLength(1);
     expect(await ctx.c.shifts.countDocuments({ userId: staffId, status: 'WORKING' })).toBe(1);
+  });
+
+  it('lets a staff member assigned to two sites clock in and out at either one', async () => {
+    const atSecond = await postEvent(eventBody({ siteId: secondSite._id.toHexString() }), 'two-sites-in');
+    expect(atSecond.body.outcome).toBe('ACCEPTED');
+    let shift = await ctx.c.shifts.findOne({ userId: staffId, status: 'WORKING' });
+    expect(shift?.siteId.toHexString()).toBe(secondSite._id.toHexString());
+
+    const out = await postEvent({
+      clientEventId: crypto.randomUUID(),
+      clientShiftId: shift!.clientShiftId,
+      deviceId: 'device-test-0001',
+      siteId: secondSite._id.toHexString(),
+      type: 'CLOCK_OUT',
+      capturedAt: new Date().toISOString(),
+      location: insideLocation(),
+      sitePolicyVersion: 1,
+    }, 'two-sites-out');
+    expect(out.body.outcome).toBe('ACCEPTED');
+
+    const atFirst = await postEvent(eventBody(), 'two-sites-back');
+    expect(atFirst.body.outcome).toBe('ACCEPTED');
+    shift = await ctx.c.shifts.findOne({ userId: staffId, status: 'WORKING' });
+    expect(shift?.siteId.toHexString()).toBe(site._id.toHexString());
   });
 
   it('rejects a clock-in without location without creating a shift', async () => {

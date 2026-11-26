@@ -473,7 +473,7 @@ describe('staff reports, site reviews, and site roles', () => {
     expect(candidate?.state).toBe('CANDIDATE');
     expect(await ctx.c.alerts.countDocuments({ incidentId: candidate?._id })).toBe(0);
 
-    const confirmAt = new Date(new Date(outside.capturedAt).getTime() + 121_000).toISOString();
+    const confirmAt = new Date(new Date(outside.capturedAt).getTime() + 3_601_000).toISOString();
     const second = await post(staffBAgent, '/api/v1/location/observations', {
       clientObservationId: crypto.randomUUID(),
       shiftId,

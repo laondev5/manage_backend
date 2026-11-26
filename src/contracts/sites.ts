@@ -24,7 +24,7 @@ export const sitePolicySchema = z.object({
   radiusMeters: z.number().int().min(50, 'Use at least 50 m.').max(2000, 'Use at most 2,000 m.'),
   exitBufferMeters: z.number().int().min(0).max(500).default(30),
   entryBufferMeters: z.number().int().min(0).max(500).default(15),
-  graceSeconds: z.number().int().min(30).max(1800).default(120),
+  graceSeconds: z.number().int().min(30).max(7200).default(3600),
   maxAccuracyMeters: z.number().int().min(5).max(200).default(50),
   freshnessSeconds: z.number().int().min(30).max(600).default(120),
 });

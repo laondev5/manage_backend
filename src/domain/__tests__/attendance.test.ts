@@ -32,6 +32,17 @@ describe('geo classification', () => {
     const result = classifyReading({ latitude: 6.4296, longitude: 3.4219 }, 10, site, policy);
     expect(result.classification).toBe('UNCERTAIN');
   });
+
+  it('accepts a coarse fix that is clearly inside the boundary', () => {
+    // 20 m from the centre with ±80 m accuracy: still far from the 150 m radius.
+    const result = classifyReading({ latitude: 6.42828, longitude: 3.4219 }, 80, site, policy);
+    expect(result.classification).toBe('INSIDE');
+  });
+
+  it('keeps a coarse fix near the edge uncertain', () => {
+    const result = classifyReading({ latitude: 6.4293, longitude: 3.4219 }, 80, site, policy);
+    expect(result.classification).toBe('UNCERTAIN');
+  });
 });
 
 describe('clock-in decisions', () => {
