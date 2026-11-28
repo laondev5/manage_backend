@@ -48,6 +48,7 @@ import {
 import type { AuthContext } from '../http/context.js';
 import type { Env } from '../env.js';
 import { assertRange, exportRowsForSites, mapTimesheetRows } from './owner.js';
+import { purgeOwnerAndSites, purgeStaffMember } from './purge.js';
 
 export function adminOrganizationIds(auth: AuthContext): string[] {
   return auth.actor.adminOrganizationIds;
@@ -846,16 +847,22 @@ export async function reactivateUserAdmin(
 }
 
 /**
- * Platform-admin account deletion is a revocation, not a hard delete. The
- * identity document stays so append-only attendance, reports, and audit
- * entries remain attributable. Access, sessions, assignments, and pending
- * invitations are removed immediately.
+ * Platform-admin account deletion.
+ *
+ * By default this is a revocation, not a hard delete: the identity document
+ * stays so append-only attendance, reports, and audit entries remain
+ * attributable. Access, sessions, assignments, and pending invitations are
+ * removed immediately.
+ *
+ * When the admin asks for a permanent deletion the account is removed from the
+ * database outright. If the person is a site owner, the sites they own and
+ * every staff member assigned to those sites are deleted with them.
  */
 export async function deleteUserAdmin(
   db: Database,
   auth: AuthContext,
   userId: string,
-  input: { reason: string },
+  input: { reason: string; permanent?: boolean },
   requestId: string,
 ): Promise<AdminUserDeleteSummary> {
   if (auth.user.id === userId) {
@@ -886,6 +893,113 @@ export async function deleteUserAdmin(
       'This person is still clocked in. End their shift before deleting the account.',
       'CONFLICT',
     );
+  }
+
+  if (input.permanent) {
+    // A site owner owns sites and the staff assigned to them. Deleting the
+    // owner without those would leave orphaned sites and staff behind.
+    const ownerMembership = await db.c.memberships.findOne({
+      userId,
+      role: 'SITE_OWNER',
+      status: { $in: ['ACTIVE', 'SUSPENDED'] },
+    });
+    const organizationId =
+      ownerMembership?.organizationId ?? adminMembership?.organizationId ?? null;
+
+    if (organizationId) {
+      const ownedSiteIds = (
+        await db.c.sites
+          .find({ ownerIds: userId, organizationId, deletedAt: null })
+          .toArray()
+      ).map((site) => site._id.toHexString());
+
+      const result = await purgeOwnerAndSites(db, {
+        ownerId: userId,
+        actorId: auth.user.id,
+        actorName: auth.user.name,
+        actorRole: auth.roles[0] ?? null,
+        organizationId,
+        reason: input.reason,
+        requestId,
+      });
+
+      const purgedRecords =
+        result.usersDeleted +
+        result.sessionsDeleted +
+        result.accountsDeleted +
+        result.twoFactorDeleted +
+        result.membershipsDeleted +
+        result.assignmentsDeleted +
+        result.sitesDeleted +
+        result.shiftsDeleted +
+        result.attendanceEventsDeleted +
+          result.observationsDeleted +
+        result.incidentsDeleted +
+        result.correctionsDeleted +
+        result.alertsDeleted +
+        result.devicesDeleted +
+        result.accessGrantsDeleted +
+        result.invitationsDeleted;
+
+      return {
+        id: userId,
+        email: user.email,
+        status: 'DELETED' as const,
+        membershipsRevoked: result.membershipsDeleted,
+        assignmentsEnded: result.assignmentsDeleted,
+        invitationsRevoked: result.invitationsDeleted,
+        grantsRevoked: result.accessGrantsDeleted,
+        sitesCleared: result.sitesDeleted,
+        devicesRevoked: result.devicesDeleted,
+        sessionsRevoked: result.sessionsDeleted,
+        permanent: true,
+        purgedRecords,
+        purgedUserIds: result.purgedUserIds,
+        purgedSiteIds: ownedSiteIds,
+      };
+    }
+
+    // Not a site owner: purge just this person and their own records.
+    const result = await purgeStaffMember(db, {
+      userId,
+      actorId: auth.user.id,
+      actorName: auth.user.name,
+      actorRole: auth.roles[0] ?? null,
+      organizationId: adminMembership?.organizationId ?? new ObjectId('000000000000000000000000'),
+      reason: input.reason,
+      requestId,
+    });
+    const purgedRecords =
+      result.usersDeleted +
+      result.sessionsDeleted +
+      result.accountsDeleted +
+      result.twoFactorDeleted +
+      result.membershipsDeleted +
+      result.assignmentsDeleted +
+      result.shiftsDeleted +
+      result.attendanceEventsDeleted +
+      result.observationsDeleted +
+      result.incidentsDeleted +
+      result.correctionsDeleted +
+      result.alertsDeleted +
+      result.devicesDeleted +
+      result.accessGrantsDeleted;
+    return {
+      id: userId,
+      email: user.email,
+      status: 'DELETED' as const,
+      membershipsRevoked: result.membershipsDeleted,
+      assignmentsEnded: result.assignmentsDeleted,
+      invitationsRevoked: result.invitationsDeleted,
+      grantsRevoked: result.accessGrantsDeleted,
+      sitesCleared: result.sitesCleared,
+      devicesRevoked: result.devicesDeleted,
+      sessionsRevoked: result.sessionsDeleted,
+      permanent: true,
+      purgedRecords,
+      purgedUserIds: result.purgedUserIds,
+      purgedSiteIds: [],
+    };
   }
 
   const now = new Date();

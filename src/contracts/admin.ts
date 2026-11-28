@@ -245,6 +245,13 @@ export const adminUserReactivateSchema = z.strictObject({
 
 export const adminUserDeleteSchema = z.strictObject({
   reason: z.string().trim().min(5).max(300),
+  /**
+   * When true the account is deleted from the database outright. If the person
+   * is a site owner, the sites they own and the staff assigned to those sites
+   * are deleted as well. When false (the default) the account is revoked and
+   * retained so attendance and audit history stay attributable.
+   */
+  permanent: z.boolean().optional().default(false),
 });
 
 export const adminUserDeleteSummarySchema = z.object({
@@ -258,6 +265,14 @@ export const adminUserDeleteSummarySchema = z.object({
   sitesCleared: z.number(),
   devicesRevoked: z.number(),
   sessionsRevoked: z.number(),
+  /** True when the account was deleted outright rather than revoked. */
+  permanent: z.boolean().optional(),
+  /** Number of database rows removed, when the deletion was permanent. */
+  purgedRecords: z.number().optional(),
+  /** User ids deleted, including any staff cascaded with a deleted owner. */
+  purgedUserIds: z.array(z.string()).optional(),
+  /** Sites deleted as part of a permanent owner removal. */
+  purgedSiteIds: z.array(z.string()).optional(),
 });
 
 export type AdminUserDeleteSummary = z.infer<typeof adminUserDeleteSummarySchema>;

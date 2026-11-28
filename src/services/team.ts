@@ -21,6 +21,7 @@ import {
   withTransaction,
 } from '../database/index.js';
 import type { AuthContext } from '../http/context.js';
+import { purgeStaffMember } from './purge.js';
 
 const QUERY_LIMIT = 50;
 const SHIFT_DAYS = 90;
@@ -341,9 +342,13 @@ export async function setTeamMemberStatus(
 }
 
 /**
- * Owners can remove a staff member from their whole team. The account and
- * attendance history remain, but every membership and assignment in the
- * owner's organization ends immediately.
+ * Owners can remove a staff member from their whole team.
+ *
+ * By default this is a revocation: the account and attendance history remain,
+ * but every membership and assignment in the owner's organization ends
+ * immediately. When the owner asks for a permanent removal the person is
+ * deleted from the database outright, together with their login, sessions,
+ * assignments, and the attendance rows that only they owned.
  */
 export async function removeTeamMember(
   db: Database,
@@ -363,6 +368,45 @@ export async function removeTeamMember(
   if (working > 0) {
     throw conflict('This member is still clocked in. End the shift before removing them.');
   }
+
+  if (input.permanent) {
+    const result = await purgeStaffMember(db, {
+      userId: memberId,
+      actorId: auth.user.id,
+      actorName: auth.user.name,
+      actorRole: auth.roles[0] ?? null,
+      organizationId: membership.organizationId,
+      reason: input.reason,
+      requestId,
+    });
+    const purgedRecords =
+      result.usersDeleted +
+      result.sessionsDeleted +
+      result.accountsDeleted +
+      result.twoFactorDeleted +
+      result.membershipsDeleted +
+      result.assignmentsDeleted +
+      result.shiftsDeleted +
+      result.attendanceEventsDeleted +
+      result.observationsDeleted +
+      result.incidentsDeleted +
+      result.correctionsDeleted +
+      result.alertsDeleted +
+      result.devicesDeleted +
+      result.accessGrantsDeleted;
+    return {
+      id: memberId,
+      organizationId: membership.organizationId.toHexString(),
+      membershipsRevoked: result.membershipsDeleted,
+      assignmentsEnded: result.assignmentsDeleted,
+      invitationsRevoked: result.invitationsDeleted,
+      sitesCleared: result.sitesCleared,
+      permanent: true,
+      purgedRecords,
+      purgedUserIds: result.purgedUserIds,
+    };
+  }
+
   const user = (await usersByIds(db.c, [memberId])).get(memberId);
   const now = new Date();
   const counts = {

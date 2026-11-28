@@ -13,6 +13,12 @@ export type MemberStatusUpdate = z.infer<typeof memberStatusUpdateSchema>;
 export const memberRemovalSchema = z.strictObject({
   reason: z.string().trim().min(5, 'Explain the change in at least 5 characters.').max(300),
   expectedVersion: z.number().int().min(1),
+  /**
+   * When true the person is deleted from the database outright, together with
+   * their login, sessions, assignments, and attendance rows. When false (the
+   * default) the removal is a revocation: history stays attributable.
+   */
+  permanent: z.boolean().optional().default(false),
 });
 
 export type MemberRemoval = z.infer<typeof memberRemovalSchema>;
@@ -24,6 +30,12 @@ export const memberRemovalSummarySchema = z.object({
   assignmentsEnded: z.number(),
   invitationsRevoked: z.number(),
   sitesCleared: z.number(),
+  /** True when the person was deleted outright rather than revoked. */
+  permanent: z.boolean().optional(),
+  /** Number of database rows removed, when the removal was permanent. */
+  purgedRecords: z.number().optional(),
+  /** User ids deleted, when the removal was permanent. */
+  purgedUserIds: z.array(z.string()).optional(),
 });
 
 export type MemberRemovalSummary = z.infer<typeof memberRemovalSummarySchema>;
