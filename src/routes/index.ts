@@ -72,6 +72,7 @@ import { adminExport, adminTimesheets } from '../services/admin.js';
 import * as admin from '../services/admin.js';
 import { getAlert, listMyAlerts, reviewAlertAsOwner } from '../services/alerts.js';
 import {
+  closeWorkingShift,
   currentShift,
   processAttendanceEvent,
   shiftDetail,
@@ -851,6 +852,26 @@ export function buildApiRouter(deps: AppDeps, logger: Logger): Router {
     '/shifts/:shiftId',
     asyncHandler(async (req, res) => {
       res.json(await shiftDetail(deps.db, authOf(req), objectId(param(req, 'shiftId'), 'shiftId')));
+    }),
+  );
+
+  router.post(
+    '/shifts/:shiftId/close',
+    limiter(deps, { windowMs: 60 * 1000, limit: 10, prefix: 'shift-close:', key: userOrIp }),
+    asyncHandler(async (req, res) => {
+      const input = parseBody(
+        z.strictObject({ note: z.string().trim().max(500).optional() }),
+        req.body ?? {},
+      );
+      res.json(
+        await closeWorkingShift(
+          deps.db,
+          authOf(req),
+          objectId(param(req, 'shiftId'), 'shiftId'),
+          input.note ?? null,
+          req.requestId,
+        ),
+      );
     }),
   );
 

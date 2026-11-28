@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { ObjectId } from 'mongodb';
 import {
   conflict,
@@ -537,6 +538,52 @@ async function clockOut(
         ? 'You are clocked out.'
         : (reviewReason ?? 'Your shift ended and was sent for review.'),
     reviewReason,
+  };
+}
+
+/**
+ * Closes the caller's own working shift when the original clock-in device is
+ * unavailable. The normal clock-out path needs the original clientShiftId;
+ * this recovery path reads it from the stored shift instead. The resulting
+ * shift is always marked NEEDS_REVIEW so the owner can see it was recovered.
+ */
+export async function closeWorkingShift(
+  db: Database,
+  auth: AuthContext,
+  shiftId: ObjectId,
+  note: string | null,
+  requestId: string,
+): Promise<ClockResult> {
+  const shift = await findShiftById(db.c, shiftId);
+  if (!shift || shift.userId !== auth.user.id || shift.status !== 'WORKING') {
+    throw notFound('No active shift was found for this account.');
+  }
+  const result = await clockOut(
+    db,
+    auth,
+    {
+      clientEventId: randomUUID(),
+      clientShiftId: shift.clientShiftId,
+      deviceId: `recovery-${shiftId.toHexString()}`,
+      siteId: shift.siteId.toHexString(),
+      type: 'CLOCK_OUT',
+      capturedAt: new Date().toISOString(),
+      sitePolicyVersion: shift.policyVersion,
+      ...(note ? { note } : {}),
+    },
+    requestId,
+  );
+  const reason = 'Closed from the mobile app because the original clock-in device was unavailable.';
+  await db.c.shifts.updateOne(
+    { _id: shiftId, status: 'ENDED' },
+    { $set: { reviewState: 'NEEDS_REVIEW', reviewReason: reason, updatedAt: new Date() } },
+  );
+  return {
+    ...result,
+    outcome: 'NEEDS_REVIEW',
+    message: reason,
+    reviewReason: reason,
+    shift: result.shift ? { ...result.shift, reviewState: 'NEEDS_REVIEW', reviewReason: reason } : null,
   };
 }
 
